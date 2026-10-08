@@ -2,9 +2,30 @@
 
 Мини-маркетплейс объявлений с фотографиями, категориями, поиском и модерацией перед публикацией. Backend использует FastAPI, frontend разрабатывается на Vite.
 
+## Запускаем frontend
+
+Для frontend используем Node.js 22 и npm. Команды выполняем из каталога `frontend`:
+
+```bash
+npm ci
+npm run dev
+```
+
+Vite запускает интерфейс по адресу <http://localhost:5173>. Базовый адрес backend задаёт переменная `VITE_API_URL`. Если переменная не задана, frontend обращается к `http://localhost:8000`. Для локальной настройки создаём `frontend/.env.local`:
+
+```dotenv
+VITE_API_URL=http://localhost:8000
+```
+
+Сборка frontend:
+
+```bash
+npm run build
+```
+
 ## Запускаем backend
 
-Используем Python 3.12 или новее и [uv](https://docs.astral.sh/uv/getting-started/installation/). Все команды выполняем из корня репозитория.
+Используем Python 3.12 или новее и [uv](https://docs.astral.sh/uv/getting-started/installation/). Команды выполняем из корня репозитория.
 
 Устанавливаем зависимости из lock-файла:
 

@@ -10,6 +10,7 @@ import {
   loadListingPhoto,
   loadCategories,
   loadMyListings,
+  loadPublicListing,
   loadSubmissionRules,
   loadPublicListings,
   registerUser,
@@ -173,7 +174,7 @@ function CatalogPage() {
         {state === 'ready' && listings.length > 0 && (
           <div className="public-listings">
             {listings.map((listing) => (
-              <article className="public-listing-card" key={listing.id}>
+              <Link className="public-listing-card" key={listing.id} to={`/listings/${listing.id}`}>
                 {listing.main_photo_url ? (
                   <img className="public-listing-photo" src={`${API_URL}${listing.main_photo_url}`} alt={listing.title} />
                 ) : (
@@ -184,11 +185,99 @@ function CatalogPage() {
                   <h2>{listing.title}</h2>
                   <p className="public-listing-price">{new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB' }).format(listing.price)}</p>
                 </div>
-              </article>
+              </Link>
             ))}
           </div>
         )}
       </section>
+    </PageFrame>
+  )
+}
+
+function PublicListingPage() {
+  const { listingId } = useParams()
+  const [listing, setListing] = useState(null)
+  const [state, setState] = useState('loading')
+  const [error, setError] = useState('')
+  const [attempt, setAttempt] = useState(0)
+  const [activePhoto, setActivePhoto] = useState(0)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setState('loading')
+    setListing(null)
+    loadPublicListing(listingId, controller.signal)
+      .then((data) => {
+        setListing(data)
+        setActivePhoto(0)
+        setState('ready')
+      })
+      .catch((requestError) => {
+        if (requestError.name !== 'AbortError') {
+          setError(requestError.message)
+          setState([404, 422].includes(requestError.status) ? 'not-found' : 'error')
+        }
+      })
+    return () => controller.abort()
+  }, [listingId, attempt])
+
+  if (state === 'loading') {
+    return <PageFrame eyebrow="ОБЪЯВЛЕНИЕ" title="Загружаем объявление"><p className="detail-state" role="status">Загружаем описание и фотографии…</p></PageFrame>
+  }
+
+  if (state === 'not-found') {
+    return <NotFoundPage />
+  }
+
+  if (state === 'error') {
+    return (
+      <PageFrame eyebrow="ОБЪЯВЛЕНИЕ" title="Не удалось загрузить объявление">
+        <div className="detail-state detail-state--error" role="alert">
+          <p>{error}</p>
+          <button className="button button-primary" type="button" onClick={() => setAttempt((value) => value + 1)}>Повторить</button>
+        </div>
+      </PageFrame>
+    )
+  }
+
+  const photos = listing.photos || []
+  const selectedPhoto = photos[activePhoto]
+
+  return (
+    <PageFrame eyebrow={listing.category.toLocaleUpperCase('ru-RU')} title={listing.title}>
+      <article className="public-listing-detail">
+        <section className="listing-gallery" aria-label="Фотографии объявления">
+          {selectedPhoto ? (
+            <img className="listing-gallery-main" src={`${API_URL}/media/${selectedPhoto.id}`} alt={`${listing.title}, фото ${activePhoto + 1} из ${photos.length}`} />
+          ) : (
+            <div className="listing-gallery-empty">Фотографии отсутствуют</div>
+          )}
+          {photos.length > 1 && (
+            <div className="listing-gallery-controls" aria-label="Выбор фотографии">
+              {photos.map((photo, index) => (
+                <button
+                  aria-label={`Показать фото ${index + 1}`}
+                  aria-pressed={index === activePhoto}
+                  className={`listing-gallery-thumb${index === activePhoto ? ' listing-gallery-thumb--active' : ''}`}
+                  key={photo.id}
+                  onClick={() => setActivePhoto(index)}
+                  type="button"
+                >
+                  <img src={`${API_URL}/media/${photo.id}`} alt="" />
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+        <section className="listing-detail-copy">
+          <p className="listing-detail-category">{listing.category}</p>
+          <p className="listing-detail-price">{new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB' }).format(listing.price)}</p>
+          <h2>Описание</h2>
+          <p className="listing-detail-description">{listing.description}</p>
+          <div className="listing-detail-author"><span>Автор объявления</span><strong>{listing.author_display_name}</strong></div>
+        </section>
+      </article>
+      <Link className="listing-back-link" to="/">← Вернуться в каталог</Link>
     </PageFrame>
   )
 }
@@ -830,6 +919,7 @@ export default function App() {
         <Route element={<AuthPage mode="login" onAuthenticated={setUser} />} path="/login" />
         <Route element={<AuthPage mode="register" onAuthenticated={setUser} />} path="/register" />
         <Route element={<CreateListingPage user={user} />} path="/listings/new" />
+        <Route element={<PublicListingPage />} path="/listings/:listingId" />
         <Route element={<CreateListingPage user={user} />} path="/listings/:listingId/edit" />
         <Route element={<MyListingsPage user={user} />} path="/my-listings" />
         <Route element={<ModerationQueuePage user={user} />} path="/moderation" />

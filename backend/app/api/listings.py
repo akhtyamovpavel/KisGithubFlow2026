@@ -119,6 +119,22 @@ class PublicListingResponse(BaseModel):
     main_photo_url: str | None
 
 
+class PublicListingPhotoResponse(BaseModel):
+    id: int
+    content_type: str
+    position: int
+
+
+class PublicListingDetailResponse(BaseModel):
+    id: int
+    title: str
+    description: str
+    price: Decimal
+    category: str
+    author_display_name: str
+    photos: list[PublicListingPhotoResponse]
+
+
 def public_listing_response(listing: Listing) -> PublicListingResponse:
     main_photo = min(
         listing.photos,
@@ -131,6 +147,48 @@ def public_listing_response(listing: Listing) -> PublicListingResponse:
         price=listing.price,
         category=listing.category.name,
         main_photo_url=f"/media/{main_photo.id}" if main_photo is not None else None,
+    )
+
+
+@router.get("/public/{listing_id}", response_model=PublicListingDetailResponse)
+def get_public_listing_detail(
+    listing_id: int,
+    session: DatabaseSession,
+) -> PublicListingDetailResponse:
+    statement = (
+        select(Listing)
+        .where(
+            Listing.id == listing_id,
+            Listing.status == ListingStatus.PUBLISHED,
+        )
+        .options(
+            selectinload(Listing.category),
+            selectinload(Listing.photos),
+            selectinload(Listing.author),
+        )
+    )
+    listing = session.scalar(statement)
+    if listing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Listing not found",
+        )
+
+    return PublicListingDetailResponse(
+        id=listing.id,
+        title=listing.title,
+        description=listing.description,
+        price=listing.price,
+        category=listing.category.name,
+        author_display_name=listing.author.display_name,
+        photos=[
+            PublicListingPhotoResponse(
+                id=photo.id,
+                content_type=photo.content_type,
+                position=photo.position,
+            )
+            for photo in listing.photos
+        ],
     )
 
 

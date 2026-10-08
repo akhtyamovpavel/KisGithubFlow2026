@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 
 from app.api.dependencies import CurrentUser, DatabaseSession
-from app.models import Category, Listing, ListingStatus
+from app.models import Category, Listing, ListingStatus, UserRole
 
 router = APIRouter(prefix="/listings", tags=["listings"])
 
@@ -30,6 +30,18 @@ class ListingCreateRequest(BaseModel):
         return normalized_value
 
 
+class ListingUpdateRequest(ListingCreateRequest):
+    pass
+
+
+class ListingPhotoResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    content_type: str
+    position: int
+
+
 class ListingResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -40,6 +52,60 @@ class ListingResponse(BaseModel):
     category_id: int
     status: ListingStatus
     created_at: datetime
+    updated_at: datetime
+    photos: list[ListingPhotoResponse]
+
+
+def listing_response(listing: Listing) -> dict:
+    return {
+        "id": listing.id,
+        "title": listing.title,
+        "description": listing.description,
+        "price": listing.price,
+        "category_id": listing.category_id,
+        "status": listing.status,
+        "created_at": listing.created_at,
+        "updated_at": listing.updated_at,
+        "photos": listing.photos,
+    }
+
+
+def get_listing_for_view(
+    session: DatabaseSession,
+    listing_id: int,
+    viewer: CurrentUser,
+) -> Listing:
+    listing = session.get(Listing, listing_id)
+    if listing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Listing not found",
+        )
+    if listing.author_id != viewer.id and viewer.role is not UserRole.MODERATOR:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Listing not found",
+        )
+    return listing
+
+
+def get_listing_for_edit(
+    session: DatabaseSession,
+    listing_id: int,
+    author: CurrentUser,
+) -> Listing:
+    listing = session.get(Listing, listing_id)
+    if listing is None or listing.author_id != author.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Listing not found",
+        )
+    if listing.status not in {ListingStatus.DRAFT, ListingStatus.REJECTED}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only drafts and rejected listings can be edited",
+        )
+    return listing
 
 
 @router.post(
@@ -51,7 +117,7 @@ def create_listing(
     payload: ListingCreateRequest,
     session: DatabaseSession,
     author: CurrentUser,
-) -> Listing:
+) -> dict:
     category = session.scalar(
         select(Category).where(
             Category.id == payload.category_id,
@@ -79,17 +145,56 @@ def create_listing(
     session.add(listing)
     session.commit()
     session.refresh(listing)
-    return listing
+    return listing_response(listing)
 
 
 @router.get("/mine", response_model=list[ListingResponse])
 def list_my_listings(
     session: DatabaseSession,
     author: CurrentUser,
-) -> list[Listing]:
+) -> list[dict]:
     statement = (
         select(Listing)
         .where(Listing.author_id == author.id)
         .order_by(Listing.created_at.desc(), Listing.id.desc())
     )
-    return list(session.scalars(statement).all())
+    listings = session.scalars(statement).all()
+    return [listing_response(listing) for listing in listings]
+
+
+@router.get("/{listing_id}", response_model=ListingResponse)
+def get_listing(
+    listing_id: int,
+    session: DatabaseSession,
+    viewer: CurrentUser,
+) -> dict:
+    return listing_response(get_listing_for_view(session, listing_id, viewer))
+
+
+@router.put("/{listing_id}", response_model=ListingResponse)
+def update_draft_listing(
+    listing_id: int,
+    payload: ListingUpdateRequest,
+    session: DatabaseSession,
+    author: CurrentUser,
+) -> dict:
+    listing = get_listing_for_edit(session, listing_id, author)
+    category = session.scalar(
+        select(Category).where(
+            Category.id == payload.category_id,
+            Category.is_active.is_(True),
+        )
+    )
+    if category is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"field": "category_id", "message": "Select an active category"},
+        )
+
+    listing.title = payload.title
+    listing.description = payload.description
+    listing.price = payload.price
+    listing.category_id = category.id
+    session.commit()
+    session.refresh(listing)
+    return listing_response(listing)

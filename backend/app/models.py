@@ -7,6 +7,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Integer,
     Numeric,
     String,
     Text,
@@ -105,6 +106,29 @@ class Listing(Base):
     submissions: Mapped[list["ListingSubmission"]] = relationship(
         back_populates="listing", cascade="all, delete-orphan"
     )
+    photos: Mapped[list["ListingPhoto"]] = relationship(
+        back_populates="listing",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ListingPhoto.position",
+    )
+
+
+class ListingPhoto(Base):
+    __tablename__ = "listing_photos"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    listing_id: Mapped[int] = mapped_column(
+        ForeignKey("listings.id", ondelete="CASCADE"), index=True
+    )
+    storage_key: Mapped[str] = mapped_column(String(255), unique=True)
+    content_type: Mapped[str] = mapped_column(String(50))
+    position: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+
+    listing: Mapped[Listing] = relationship(back_populates="photos")
 
 
 class ListingSubmission(Base):

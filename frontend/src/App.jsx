@@ -186,6 +186,40 @@ function AuthPage({ mode, onAuthenticated }) {
   )
 }
 
+function ModerationPhoto({ submissionId, photo, token, compact = false }) {
+  const [source, setSource] = useState('')
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    let objectUrl
+    fetch(`${API_URL}/moderation/queue/${submissionId}/photos/${photo.id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error('Не удалось загрузить фотографию')
+        return response.blob()
+      })
+      .then((blob) => {
+        objectUrl = URL.createObjectURL(blob)
+        setSource(objectUrl)
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') setFailed(true)
+      })
+    return () => {
+      controller.abort()
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [photo.id, submissionId, token])
+
+  return <figure className={`moderation-photo${compact ? ' moderation-photo--compact' : ''}`}>
+    {source ? <img alt={photo.original_filename} src={source} /> : <div className="moderation-photo-placeholder" aria-label={failed ? 'Фотография недоступна' : 'Загружаем фотографию'}>{failed ? 'Фото недоступно' : 'Загрузка…'}</div>}
+    {!compact && <figcaption>{photo.original_filename}</figcaption>}
+  </figure>
+}
+
 function ModerationQueuePage({ user }) {
   const [items, setItems] = useState([])
   const [selected, setSelected] = useState(null)
@@ -239,7 +273,7 @@ function ModerationQueuePage({ user }) {
           <div className="queue-item-heading"><h2>{item.title}</h2><time dateTime={item.submitted_at}>{new Date(item.submitted_at).toLocaleString('ru-RU')}</time></div>
           <p className="queue-meta">{item.author.display_name} · {item.category_name}</p>
           <div className="queue-photos" aria-label={`Фотографий: ${item.photos.length}`}>
-            {item.photos.length ? item.photos.slice(0, 4).map((photo) => <span className="photo-chip" key={photo.id} title={photo.original_filename}>▧ {photo.original_filename}</span>) : <span className="photo-chip photo-chip--empty">Без фотографий</span>}
+            {item.photos.length ? item.photos.slice(0, 4).map((photo) => <ModerationPhoto compact key={photo.id} photo={photo} submissionId={item.id} token={token} />) : <span className="photo-chip photo-chip--empty">Без фотографий</span>}
             {item.photos.length > 4 && <span className="photo-chip">+{item.photos.length - 4}</span>}
           </div>
           <button className="text-button queue-open" onClick={() => openSubmission(item.id)} type="button">Открыть карточку →</button>
@@ -254,7 +288,7 @@ function ModerationQueuePage({ user }) {
           <p className="submission-description">{selected.description}</p>
           <div className="submission-author"><strong>{selected.author.display_name}</strong><a href={`mailto:${selected.author.email}`}>{selected.author.email}</a></div>
           <h3>Фотографии ({selected.photos.length})</h3>
-          <div className="submission-photos">{selected.photos.length ? selected.photos.map((photo) => <div className="submission-photo" key={photo.id}><span aria-hidden="true">▧</span><span>{photo.original_filename}</span></div>) : <p className="queue-muted">Фотографии не приложены.</p>}</div>
+          <div className="submission-photos">{selected.photos.length ? selected.photos.map((photo) => <ModerationPhoto key={photo.id} photo={photo} submissionId={selected.id} token={token} />) : <p className="queue-muted">Фотографии не приложены.</p>}</div>
         </> : <div className="detail-placeholder"><span aria-hidden="true">↖</span><h2>Выберите объявление</h2><p>Полная карточка и фотографии появятся здесь.</p></div>}
         {error && <p className="form-error" role="alert">{error}</p>}
       </section>

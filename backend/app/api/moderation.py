@@ -2,12 +2,19 @@ from datetime import datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, EmailStr
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import DatabaseSession, ModeratorUser
-from app.models import Listing, ListingStatus, ListingSubmission
+from app.media_storage import path_for_storage_key
+from app.models import (
+    Listing,
+    ListingStatus,
+    ListingSubmission,
+    ListingSubmissionPhoto,
+)
 
 router = APIRouter(prefix="/moderation", tags=["moderation"])
 
@@ -111,3 +118,47 @@ def moderation_queue_detail(
     result = _queue_item(submission)
     result["description"] = submission.description
     return result
+
+
+@router.get(
+    "/queue/{submission_id}/photos/{photo_id}",
+    include_in_schema=False,
+)
+def moderation_submission_photo(
+    submission_id: int,
+    photo_id: int,
+    session: DatabaseSession,
+    moderator: ModeratorUser,
+) -> FileResponse:
+    del moderator
+    photo = session.scalar(
+        select(ListingSubmissionPhoto)
+        .join(ListingSubmission)
+        .join(Listing)
+        .where(
+            ListingSubmission.id == submission_id,
+            ListingSubmissionPhoto.id == photo_id,
+            Listing.status == ListingStatus.PENDING,
+            ~ListingSubmission.decision.has(),
+        )
+    )
+    if photo is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pending submission photo not found",
+        )
+
+    try:
+        path = path_for_storage_key(photo.storage_key)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Photo file not found",
+        ) from error
+    if not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Photo file not found",
+        )
+
+    return FileResponse(path, media_type=photo.content_type)

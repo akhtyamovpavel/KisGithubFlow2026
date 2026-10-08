@@ -15,6 +15,7 @@ from app.models import (
     ListingSubmission,
     ListingSubmissionPhoto,
 )
+from app.services.listing_validation import rule_results
 
 router = APIRouter(prefix="/moderation", tags=["moderation"])
 
@@ -49,8 +50,16 @@ class ModerationQueueItemResponse(BaseModel):
     photos: list[SubmissionPhotoResponse]
 
 
+class ModerationRuleResponse(BaseModel):
+    id: str
+    field: str
+    label: str
+    passed: bool
+
+
 class ModerationQueueDetailResponse(ModerationQueueItemResponse):
     description: str
+    rules: list[ModerationRuleResponse]
 
 
 def pending_submission_query():
@@ -117,6 +126,7 @@ def moderation_queue_detail(
 
     result = _queue_item(submission)
     result["description"] = submission.description
+    result["rules"] = rule_results(submission.listing, submission.photos)
     return result
 
 

@@ -4,8 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.auth import router as auth_router
 from app.api.categories import router as categories_router
 from app.api.health import router as health_router
-from app.api.listings import router as listings_router
 from app.api.history import router as history_router
+from app.api.listings import router as listings_router
 from app.api.moderation import router as moderation_router
 from app.api.photos import router as photos_router
 from app.config import Settings, get_settings

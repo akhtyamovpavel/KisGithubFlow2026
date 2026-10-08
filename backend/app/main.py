@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.auth import router as auth_router
+from app.api.categories import router as categories_router
 from app.api.health import router as health_router
 from app.config import Settings, get_settings
 
@@ -18,6 +20,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["Authorization", "Content-Type"],
     )
     application.include_router(health_router)
+    application.include_router(categories_router)
+    application.include_router(auth_router)
     return application
 
 

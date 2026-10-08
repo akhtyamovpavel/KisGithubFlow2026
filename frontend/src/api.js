@@ -120,6 +120,10 @@ export function loadMyListings(signal) {
   return request('/listings/mine', { signal })
 }
 
+export function loadListingHistory(listingId, signal) {
+  return request(`/listings/${listingId}/history`, { signal })
+}
+
 export function uploadListingPhoto(listingId, file) {
   const body = new FormData()
   body.append('image', file)

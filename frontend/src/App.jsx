@@ -7,6 +7,7 @@ import {
   createListing,
   loadCategories,
   loadMyListings,
+  loadPublicListings,
   registerUser,
   signIn,
 } from './api.js'
@@ -104,6 +105,28 @@ function PageFrame({ eyebrow, title, description, children }) {
 }
 
 function CatalogPage() {
+  const [listings, setListings] = useState([])
+  const [state, setState] = useState('loading')
+  const [error, setError] = useState('')
+  const [attempt, setAttempt] = useState(0)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setState('loading')
+    loadPublicListings(controller.signal)
+      .then((data) => {
+        setListings(data)
+        setState('ready')
+      })
+      .catch((requestError) => {
+        if (requestError.name !== 'AbortError') {
+          setError(requestError.message)
+          setState('error')
+        }
+      })
+    return () => controller.abort()
+  }, [attempt])
+
   return (
     <PageFrame
       eyebrow="МАРКЕТПЛЕЙС ОБЪЯВЛЕНИЙ"
@@ -112,20 +135,50 @@ function CatalogPage() {
     >
       <section className="catalog-panel" aria-label="Каталог объявлений">
         <div className="catalog-toolbar">
-          <span className="result-count">Скоро здесь появятся объявления</span>
+          <span className="result-count">
+            {state === 'loading' ? 'Загружаем объявления' : `Опубликованных объявлений: ${listings.length}`}
+          </span>
           <span className="location-pill"><span aria-hidden="true">⌖</span> Город не выбран</span>
         </div>
-        <div className="empty-state">
-          <div className="empty-illustration" aria-hidden="true">
-            <span className="sun"></span>
-            <span className="package package-back"></span>
-            <span className="package package-front"></span>
-            <span className="plant">✳</span>
+        {state === 'loading' && <div className="catalog-message" role="status">Загружаем каталог…</div>}
+        {state === 'error' && (
+          <div className="empty-state" role="alert">
+            <h2>Не удалось загрузить каталог</h2>
+            <p>{error}</p>
+            <button className="button button-primary" type="button" onClick={() => setAttempt((value) => value + 1)}>Повторить</button>
           </div>
-          <h2>Каталог готовится к открытию</h2>
-          <p>Пока подключаем каталог. Уже можно подготовить объявление о своей вещи.</p>
-          <Link className="button button-primary" to="/listings/new">Разместить объявление</Link>
-        </div>
+        )}
+        {state === 'ready' && listings.length === 0 && (
+          <div className="empty-state">
+            <div className="empty-illustration" aria-hidden="true">
+              <span className="sun"></span>
+              <span className="package package-back"></span>
+              <span className="package package-front"></span>
+              <span className="plant">✳</span>
+            </div>
+            <h2>Пока нет опубликованных объявлений</h2>
+            <p>Загляните позже: новые предложения появятся здесь после проверки.</p>
+            <Link className="button button-primary" to="/listings/new">Разместить объявление</Link>
+          </div>
+        )}
+        {state === 'ready' && listings.length > 0 && (
+          <div className="public-listings">
+            {listings.map((listing) => (
+              <article className="public-listing-card" key={listing.id}>
+                {listing.main_photo_url ? (
+                  <img className="public-listing-photo" src={`${API_URL}${listing.main_photo_url}`} alt={listing.title} />
+                ) : (
+                  <div className="public-listing-photo public-listing-photo--empty" aria-label="Фотографии нет">Фото отсутствует</div>
+                )}
+                <div className="public-listing-info">
+                  <p className="public-listing-category">{listing.category}</p>
+                  <h2>{listing.title}</h2>
+                  <p className="public-listing-price">{new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB' }).format(listing.price)}</p>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
       </section>
     </PageFrame>
   )

@@ -67,6 +67,12 @@ cp backend/.env.example backend/.env
 
 Первого модератора создаём отдельной командой. Заполняем в `backend/.env` переменные `MARKETPLACE_MODERATOR_EMAIL`, `MARKETPLACE_MODERATOR_DISPLAY_NAME` и `MARKETPLACE_MODERATOR_PASSWORD`, затем запускаем `uv run --project backend --frozen --directory backend python -m app.create_moderator`. Пароль команды проходит ту же проверку длины и сохраняется в виде хеша.
 
+## Смотрим историю объявления
+
+Запрашиваем `GET /listings/{listing_id}/history` с заголовком `Authorization: Bearer <токен>`. Историю получает автор объявления или модератор; запрос без токена возвращает HTTP 401, а запрос другого пользователя возвращает HTTP 403. Публичный API историю не раскрывает.
+
+Каждая подача хранит номер версии, дату, снимок полей объявления и ссылки на фотографии. Решение модератора содержит статус, причину, дату и идентификатор модератора и связано с конкретной подачей. Для отказа требуется непустая причина.
+
 Используем [настройки FastAPI](https://fastapi.tiangolo.com/advanced/settings/) и [CORSMiddleware](https://fastapi.tiangolo.com/tutorial/cors/). CORS разрешает запросы браузера с указанных адресов и не заменяет авторизацию API.
 
 ## Проверяем backend

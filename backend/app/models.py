@@ -4,11 +4,13 @@ from enum import Enum
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -27,6 +29,11 @@ class ListingStatus(str, Enum):
     DRAFT = "draft"
     PENDING = "pending"
     PUBLISHED = "published"
+    REJECTED = "rejected"
+
+
+class ModerationDecisionStatus(str, Enum):
+    APPROVED = "approved"
     REJECTED = "rejected"
 
 
@@ -95,3 +102,94 @@ class Listing(Base):
 
     author: Mapped[User] = relationship(back_populates="listings")
     category: Mapped[Category] = relationship(back_populates="listings")
+    submissions: Mapped[list["ListingSubmission"]] = relationship(
+        back_populates="listing", cascade="all, delete-orphan"
+    )
+
+
+class ListingSubmission(Base):
+    __tablename__ = "listing_submissions"
+    __table_args__ = (
+        UniqueConstraint(
+            "listing_id", "version", name="uq_submission_listing_version"
+        ),
+        CheckConstraint("version > 0", name="ck_listing_submission_version"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    listing_id: Mapped[int] = mapped_column(
+        ForeignKey("listings.id", ondelete="CASCADE"), index=True
+    )
+    version: Mapped[int] = mapped_column(nullable=False)
+    submitted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(Text)
+    price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    category_name: Mapped[str] = mapped_column(String(100))
+    category_slug: Mapped[str] = mapped_column(String(100))
+
+    listing: Mapped[Listing] = relationship(back_populates="submissions")
+    photos: Mapped[list["ListingSubmissionPhoto"]] = relationship(
+        back_populates="submission",
+        cascade="all, delete-orphan",
+        order_by="ListingSubmissionPhoto.position",
+    )
+    decision: Mapped["ModerationDecision | None"] = relationship(
+        back_populates="submission", cascade="all, delete-orphan", uselist=False
+    )
+
+
+class ListingSubmissionPhoto(Base):
+    __tablename__ = "listing_submission_photos"
+    __table_args__ = (
+        UniqueConstraint(
+            "submission_id", "position", name="uq_submission_photo_position"
+        ),
+        CheckConstraint("position >= 0", name="ck_submission_photo_position"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    submission_id: Mapped[int] = mapped_column(
+        ForeignKey("listing_submissions.id", ondelete="CASCADE"), index=True
+    )
+    storage_key: Mapped[str] = mapped_column(String(512))
+    original_filename: Mapped[str] = mapped_column(String(255))
+    content_type: Mapped[str] = mapped_column(String(100))
+    position: Mapped[int] = mapped_column(nullable=False)
+
+    submission: Mapped[ListingSubmission] = relationship(back_populates="photos")
+
+
+class ModerationDecision(Base):
+    __tablename__ = "moderation_decisions"
+    __table_args__ = (
+        CheckConstraint(
+            "status != 'rejected' OR coalesce(length(trim(reason)), 0) > 0",
+            name="ck_moderation_rejection_reason",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    submission_id: Mapped[int] = mapped_column(
+        ForeignKey("listing_submissions.id", ondelete="CASCADE"), unique=True
+    )
+    moderator_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    status: Mapped[ModerationDecisionStatus] = mapped_column(
+        SqlEnum(
+            ModerationDecisionStatus,
+            name="moderation_decision_status",
+            create_constraint=True,
+            values_callable=lambda enum: [member.value for member in enum],
+        )
+    )
+    reason: Mapped[str | None] = mapped_column(Text)
+    decided_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+
+    submission: Mapped[ListingSubmission] = relationship(back_populates="decision")
+    moderator: Mapped[User] = relationship()

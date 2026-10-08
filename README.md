@@ -30,6 +30,8 @@ cp backend/.env.example backend/.env
 
 Переменная `MARKETPLACE_APP_NAME` задаёт название API. Переменная `MARKETPLACE_CORS_ORIGINS` содержит JSON-массив разрешённых адресов frontend. По умолчанию разрешены `http://localhost:5173` и `http://127.0.0.1:5173`. При изменении порта Vite добавляем полный адрес с портом в список.
 
+Переменная `MARKETPLACE_DATABASE_URL` задаёт адрес базы данных. По умолчанию используется SQLite в `backend/marketplace.db`. Создаём схему и применяем обновления командой `uv run --project backend --frozen alembic -c backend/alembic.ini upgrade head`. Версию схемы смотрим командой `uv run --project backend --frozen alembic -c backend/alembic.ini current`.
+
 Настройки процесса имеют приоритет над `backend/.env`. Файл окружения ищется относительно каталога backend, независимо от рабочей директории. После изменения настроек перезапускаем сервер. Файлы `.env` и виртуальное окружение исключены из Git, секреты передаём через окружение.
 
 Используем [настройки FastAPI](https://fastapi.tiangolo.com/advanced/settings/) и [CORSMiddleware](https://fastapi.tiangolo.com/tutorial/cors/). CORS разрешает запросы браузера с указанных адресов и не заменяет авторизацию API.

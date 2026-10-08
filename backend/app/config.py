@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Mini Marketplace"
+    database_url: str = (
+        f"sqlite:///{Path(__file__).resolve().parents[1] / 'marketplace.db'}"
+    )
     cors_origins: list[str] = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",

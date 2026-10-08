@@ -143,8 +143,11 @@ export async function loadListingPhoto(photoId, signal) {
   return response.blob()
 }
 
-export function loadPublicListings(signal) {
-  return request('/listings', { signal, token: null })
+export function loadPublicListings(signal, query = '') {
+  const search = new URLSearchParams()
+  if (query) search.set('q', query)
+  const suffix = search.size ? `?${search.toString()}` : ''
+  return request(`/listings${suffix}`, { signal, token: null })
 }
 
 export { API_URL }

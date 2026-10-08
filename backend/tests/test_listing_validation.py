@@ -97,7 +97,8 @@ def test_listing_validation_accepts_rule_boundaries(
         category=category,
     )
 
-    assert validate_listing(listing, photos=[object() for _ in range(photo_count)]) == []
+    photos = [object() for _ in range(photo_count)]
+    assert validate_listing(listing, photos=photos) == []
 
 
 def test_listing_validation_reports_each_field_violation():

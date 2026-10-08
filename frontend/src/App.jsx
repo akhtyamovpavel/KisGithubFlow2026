@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, NavLink, Route, Routes, useNavigate, useParams } from 'react-router-dom'
+import { Link, NavLink, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   API_URL,
   apiRequest,
@@ -115,18 +115,41 @@ function PageFrame({ eyebrow, title, description, children }) {
 }
 
 function CatalogPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const selectedCategoryId = searchParams.get('category_id') || ''
   const [listings, setListings] = useState([])
   const [state, setState] = useState('loading')
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
+  const [categories, setCategories] = useState([])
+  const [categoryState, setCategoryState] = useState('loading')
+  const [categoryError, setCategoryError] = useState('')
+  const [categoryAttempt, setCategoryAttempt] = useState(0)
   const [searchInput, setSearchInput] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [searchError, setSearchError] = useState('')
 
   useEffect(() => {
     const controller = new AbortController()
+    setCategoryState('loading')
+    loadCategories(controller.signal)
+      .then((data) => {
+        setCategories(data)
+        setCategoryState('ready')
+      })
+      .catch((requestError) => {
+        if (requestError.name !== 'AbortError') {
+          setCategoryError(requestError.message)
+          setCategoryState('error')
+        }
+      })
+    return () => controller.abort()
+  }, [categoryAttempt])
+
+  useEffect(() => {
+    const controller = new AbortController()
     setState('loading')
-    loadPublicListings(controller.signal, searchQuery)
+    loadPublicListings(controller.signal, searchQuery, selectedCategoryId)
       .then((data) => {
         setListings(data)
         setState('ready')
@@ -138,7 +161,20 @@ function CatalogPage() {
         }
       })
     return () => controller.abort()
-  }, [attempt, searchQuery])
+  }, [attempt, searchQuery, selectedCategoryId])
+
+  function handleCategoryChange(event) {
+    const categoryId = event.target.value
+    setSearchParams((currentParams) => {
+      const nextParams = new URLSearchParams(currentParams)
+      if (categoryId) {
+        nextParams.set('category_id', categoryId)
+      } else {
+        nextParams.delete('category_id')
+      }
+      return nextParams
+    })
+  }
 
   function handleSearch(event) {
     event.preventDefault()
@@ -172,10 +208,24 @@ function CatalogPage() {
           <span className="result-count">
             {state === 'loading'
               ? 'Загружаем объявления'
-              : searchQuery
+              : searchQuery || selectedCategoryId
                 ? `Найдено объявлений: ${listings.length}`
                 : `Опубликованных объявлений: ${listings.length}`}
           </span>
+          <label className="catalog-category-filter" htmlFor="catalog-category-filter">
+            <span className="visually-hidden">Фильтр по категории</span>
+            <select
+              disabled={categoryState !== 'ready'}
+              id="catalog-category-filter"
+              onChange={handleCategoryChange}
+              value={selectedCategoryId}
+            >
+              <option value="">Все категории</option>
+              {categories.map((category) => (
+                <option key={category.id} value={String(category.id)}>{category.name}</option>
+              ))}
+            </select>
+          </label>
           <form className="catalog-search" onSubmit={handleSearch} role="search">
             <label className="visually-hidden" htmlFor="catalog-search-input">Поиск объявлений</label>
             <input
@@ -192,6 +242,13 @@ function CatalogPage() {
           </form>
           <span className="location-pill"><span aria-hidden="true">⌖</span> Город не выбран</span>
         </div>
+        {categoryState === 'loading' && <p className="catalog-filter-status" role="status">Загружаем категории…</p>}
+        {categoryState === 'error' && (
+          <div className="catalog-filter-error" role="alert">
+            <span>Не удалось загрузить категории: {categoryError}</span>
+            <button className="text-button" onClick={() => setCategoryAttempt((value) => value + 1)} type="button">Повторить</button>
+          </div>
+        )}
         {searchError && <p className="catalog-search-error" role="alert">{searchError}</p>}
         {state === 'loading' && <div className="catalog-message" role="status">Загружаем каталог…</div>}
         {state === 'error' && (

@@ -146,9 +146,10 @@ export async function loadListingPhoto(photoId, signal) {
   return response.blob()
 }
 
-export function loadPublicListings(signal, query = '') {
+export function loadPublicListings(signal, query = '', categoryId = '') {
   const search = new URLSearchParams()
   if (query) search.set('q', query)
+  if (categoryId) search.set('category_id', categoryId)
   const suffix = search.size ? `?${search.toString()}` : ''
   return request(`/listings${suffix}`, { signal, token: null })
 }

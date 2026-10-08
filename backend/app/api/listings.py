@@ -400,6 +400,7 @@ def submit_listing(
 def list_published_listings(
     session: DatabaseSession,
     q: Annotated[str | None, Query(max_length=100)] = None,
+    category_id: Annotated[int | None, Query(gt=0)] = None,
 ) -> list[PublicListingResponse]:
     statement = (
         select(Listing)
@@ -426,6 +427,14 @@ def list_published_listings(
             or_(
                 Listing.title.ilike(pattern, escape="\\"),
                 Listing.description.ilike(pattern, escape="\\"),
+            )
+        )
+
+    if category_id is not None:
+        statement = statement.where(
+            Listing.category.has(
+                Category.id == category_id,
+                Category.is_active.is_(True),
             )
         )
 

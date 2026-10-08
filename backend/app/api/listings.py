@@ -440,8 +440,7 @@ def list_published_listings(
     if category_id is not None:
         filters.append(
             Listing.category.has(
-                Category.id == category_id,
-                Category.is_active.is_(True),
+                (Category.id == category_id) & Category.is_active.is_(True)
             )
         )
 

@@ -157,3 +157,65 @@ def test_user_sees_only_own_listings(listing_client):
 
     assert response.status_code == 200
     assert [item["title"] for item in response.json()] == ["Film camera"]
+
+
+def test_catalog_combines_category_search_sort_and_pagination(listing_client):
+    client, session, user, category = listing_client
+    other_category = Category(name="Electronics", slug="electronics", is_active=True)
+    inactive_category = Category(name="Archived", slug="archived", is_active=False)
+    session.add_all([other_category, inactive_category])
+    session.flush()
+    matching = []
+    for price in ["20.00", "10.00", "30.00"]:
+        listing = Listing(
+            title="Film camera",
+            description="A working film camera in very good condition.",
+            price=Decimal(price),
+            category_id=category.id,
+            author_id=user.id,
+            status=ListingStatus.PUBLISHED,
+        )
+        session.add(listing)
+        matching.append(listing)
+
+    for category_id, listing_status in [
+        (other_category.id, ListingStatus.PUBLISHED),
+        (inactive_category.id, ListingStatus.PUBLISHED),
+        (category.id, ListingStatus.DRAFT),
+        (category.id, ListingStatus.PENDING),
+        (category.id, ListingStatus.REJECTED),
+    ]:
+        session.add(
+            Listing(
+                title="Film camera",
+                description="A working film camera in very good condition.",
+                price=Decimal("1.00"),
+                category_id=category_id,
+                author_id=user.id,
+                status=listing_status,
+            )
+        )
+    session.commit()
+
+    response = client.get(
+        "/listings",
+        params={
+            "q": "camera",
+            "category_id": category.id,
+            "sort_by": "price",
+            "sort_order": "asc",
+            "page_size": 1,
+            "page": 2,
+        },
+    )
+    assert response.status_code == 200
+    page = response.json()
+    assert page["total"] == 3
+    assert page["total_pages"] == 3
+    assert page["page"] == 2
+    assert [item["id"] for item in page["items"]] == [matching[0].id]
+    inactive_response = client.get(
+        "/listings", params={"category_id": inactive_category.id}
+    )
+    assert inactive_response.status_code == 200
+    assert inactive_response.json()["total"] == 0

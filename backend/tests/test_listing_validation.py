@@ -95,10 +95,9 @@ def test_listing_validation_accepts_rule_boundaries(
         description=description,
         price=price,
         category=category,
-        photos=[object() for _ in range(photo_count)],
     )
 
-    assert validate_listing(listing) == []
+    assert validate_listing(listing, photos=[object() for _ in range(photo_count)]) == []
 
 
 def test_listing_validation_reports_each_field_violation():
@@ -108,10 +107,9 @@ def test_listing_validation_reports_each_field_violation():
         description="short",
         price=Decimal("-1.001"),
         category=category,
-        photos=[object() for _ in range(6)],
     )
 
-    violations = validate_listing(listing)
+    violations = validate_listing(listing, photos=[object() for _ in range(6)])
 
     assert {item["field"] for item in violations} == {
         "title",
@@ -136,13 +134,10 @@ def test_listing_validation_rejects_text_above_maximum_lengths():
         description="x" * 5001,
         price=Decimal("1.00"),
         category=category,
-        photos=[object()],
     )
 
-    assert {item["field"] for item in validate_listing(listing)} == {
-        "title",
-        "description",
-    }
+    violations = validate_listing(listing, photos=[object()])
+    assert {item["field"] for item in violations} == {"title", "description"}
 
 
 def test_listing_validation_rejects_inactive_category_from_api(validation_client):

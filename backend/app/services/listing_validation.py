@@ -59,7 +59,10 @@ def validate_listing(
             {
                 "rule_id": "price_precision",
                 "field": "price",
-                "message": "Укажите неотрицательную цену с точностью до двух знаков после запятой.",
+                "message": (
+                    "Укажите неотрицательную цену с точностью до двух знаков "
+                    "после запятой."
+                ),
             }
         )
     if category is None or not category.is_active:

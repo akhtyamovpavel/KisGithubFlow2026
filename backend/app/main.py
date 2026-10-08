@@ -5,6 +5,7 @@ from app.api.auth import router as auth_router
 from app.api.categories import router as categories_router
 from app.api.health import router as health_router
 from app.api.history import router as history_router
+from app.api.moderation import router as moderation_router
 from app.config import Settings, get_settings
 
 
@@ -24,6 +25,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(categories_router)
     application.include_router(auth_router)
     application.include_router(history_router)
+    application.include_router(moderation_router)
     return application
 
 

@@ -1,0 +1,1301 @@
+import { useEffect, useRef, useState } from 'react'
+import { Link, NavLink, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import {
+  API_URL,
+  apiRequest,
+  checkApiHealth,
+  createListing,
+  decideModeration,
+  deleteListingPhoto,
+  loadListing,
+  loadListingHistory,
+  loadListingPhoto,
+  loadCategories,
+  loadMyListings,
+  loadListingHistory,
+  loadPublicListing,
+  loadSubmissionRules,
+  loadPublicListings,
+  registerUser,
+  replaceListingPhoto,
+  signIn,
+  submitListing,
+  updateListing,
+  uploadListingPhoto,
+  validateListing,
+} from './api.js'
+
+const LISTING_STATUS_LABELS = {
+  draft: 'Черновик',
+  pending: 'На модерации',
+  published: 'Опубликовано',
+  rejected: 'Отклонено',
+}
+
+function readUser() {
+  try {
+    return JSON.parse(localStorage.getItem('marketplace-user'))
+  } catch {
+    return null
+  }
+}
+
+function ApiStatus() {
+  const [state, setState] = useState({ status: 'loading', message: '' })
+  const [attempt, setAttempt] = useState(0)
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    setState({ status: 'loading', message: '' })
+    checkApiHealth(controller.signal)
+      .then(() => setState({ status: 'ready', message: 'Сервис доступен' }))
+      .catch((error) => {
+        if (error.name !== 'AbortError') {
+          setState({ status: 'error', message: error.message })
+        }
+      })
+
+    return () => controller.abort()
+  }, [attempt])
+
+  if (state.status === 'loading') {
+    return <div className="api-status api-status--loading" role="status">Проверяем связь с сервером</div>
+  }
+
+  if (state.status === 'error') {
+    return (
+      <div className="api-status api-status--error" role="alert">
+        <span>{state.message}</span>
+        <button className="text-button" type="button" onClick={() => setAttempt((value) => value + 1)}>
+          Повторить
+        </button>
+      </div>
+    )
+  }
+
+  return <div className="api-status api-status--ready" role="status">{state.message}</div>
+}
+
+function Header({ user }) {
+  return (
+    <header className="site-header">
+      <Link className="brand" to="/" aria-label="Рядом, на главную">
+        <span className="brand-mark" aria-hidden="true">р</span>
+        <span>рядом</span>
+      </Link>
+      <nav className="main-nav" aria-label="Основная навигация">
+        <NavLink end to="/">Каталог</NavLink>
+        {user ? (
+          <>
+            <NavLink to="/listings/new">Разместить</NavLink>
+            <NavLink to="/my-listings">Мои объявления</NavLink>
+            {user.role === 'moderator' && <NavLink to="/moderation">Модерация</NavLink>}
+            <span className="user-label">{user.name || 'Мой профиль'}</span>
+          </>
+        ) : (
+          <>
+            <NavLink to="/login">Войти</NavLink>
+            <NavLink className="nav-cta" to="/register">Создать аккаунт</NavLink>
+          </>
+        )}
+      </nav>
+    </header>
+  )
+}
+
+function PageFrame({ eyebrow, title, description, children }) {
+  return (
+    <main className="page-shell">
+      <div className="page-heading">
+        <p className="eyebrow">{eyebrow}</p>
+        <h1>{title}</h1>
+        {description && <p className="page-description">{description}</p>}
+      </div>
+      {children}
+    </main>
+  )
+}
+
+function CatalogPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const paramsString = searchParams.toString()
+  const searchQuery = searchParams.get('q') || ''
+  const selectedCategoryId = searchParams.get('category_id') || ''
+  const page = searchParams.get('page') || '1'
+  const pageSize = searchParams.get('page_size') || '12'
+  const sortBy = searchParams.get('sort_by') || 'published_at'
+  const sortOrder = searchParams.get('sort_order') || 'desc'
+  const [listings, setListings] = useState([])
+  const [pagination, setPagination] = useState({ page: 1, page_size: 12, total: 0, total_pages: 0 })
+  const [state, setState] = useState('loading')
+  const [error, setError] = useState('')
+  const [attempt, setAttempt] = useState(0)
+  const [categories, setCategories] = useState([])
+  const [categoryState, setCategoryState] = useState('loading')
+  const [categoryError, setCategoryError] = useState('')
+  const [categoryAttempt, setCategoryAttempt] = useState(0)
+  const [searchInput, setSearchInput] = useState(searchQuery)
+  const [searchError, setSearchError] = useState('')
+
+  useEffect(() => {
+    const nextParams = new URLSearchParams(paramsString)
+    let changed = false
+    const defaults = {
+      page: '1',
+      page_size: '12',
+      sort_by: 'published_at',
+      sort_order: 'desc',
+    }
+    Object.entries(defaults).forEach(([key, value]) => {
+      if (!nextParams.has(key)) {
+        nextParams.set(key, value)
+        changed = true
+      }
+    })
+    if (changed) setSearchParams(nextParams, { replace: true })
+  }, [paramsString, setSearchParams])
+
+  useEffect(() => {
+    setSearchInput(searchQuery)
+  }, [searchQuery])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setCategoryState('loading')
+    loadCategories(controller.signal)
+      .then((data) => {
+        setCategories(data)
+        setCategoryState('ready')
+      })
+      .catch((requestError) => {
+        if (requestError.name !== 'AbortError') {
+          setCategoryError(requestError.message)
+          setCategoryState('error')
+        }
+      })
+    return () => controller.abort()
+  }, [categoryAttempt])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setState('loading')
+    loadPublicListings(controller.signal, {
+      q: searchQuery,
+      category_id: selectedCategoryId,
+      page,
+      page_size: pageSize,
+      sort_by: sortBy,
+      sort_order: sortOrder,
+      })
+      .then((data) => {
+        const lastPage = Math.max(data.total_pages, 1)
+        const validPage = Math.min(data.page, lastPage)
+        if (validPage !== data.page) {
+          setSearchParams((currentParams) => {
+            const nextParams = new URLSearchParams(currentParams)
+            nextParams.set('page', String(validPage))
+            return nextParams
+          }, { replace: true })
+          return
+        }
+        setListings(data.items)
+        setPagination(data)
+        setState('ready')
+      })
+      .catch((requestError) => {
+        if (requestError.name !== 'AbortError') {
+          setError(requestError.message)
+          setState('error')
+        }
+      })
+    return () => controller.abort()
+  }, [attempt, paramsString, page, pageSize, searchQuery, selectedCategoryId, sortBy, sortOrder])
+
+  function updateCatalogParams(updates) {
+    setSearchParams((currentParams) => {
+      const nextParams = new URLSearchParams(currentParams)
+      Object.entries(updates).forEach(([key, value]) => {
+        if (value === null || value === '') {
+          nextParams.delete(key)
+        } else {
+          nextParams.set(key, String(value))
+        }
+      })
+      nextParams.set('page', '1')
+      return nextParams
+    })
+  }
+
+  function handleCategoryChange(event) {
+    const categoryId = event.target.value
+    updateCatalogParams({ category_id: categoryId })
+  }
+
+  function handleSearch(event) {
+    event.preventDefault()
+    const normalizedQuery = searchInput.trim()
+    if (!normalizedQuery) {
+      setSearchError('Введите текст для поиска.')
+      return
+    }
+    if (normalizedQuery.length > 100) {
+      setSearchError('Запрос должен содержать не более 100 символов.')
+      return
+    }
+    setSearchError('')
+    updateCatalogParams({ q: normalizedQuery })
+  }
+
+  function clearSearch() {
+    setSearchInput('')
+    setSearchError('')
+    updateCatalogParams({ q: null })
+  }
+
+  function handleSortChange(event) {
+    const [nextSortBy, nextSortOrder] = event.target.value.split(':')
+    updateCatalogParams({ sort_by: nextSortBy, sort_order: nextSortOrder })
+  }
+
+  function handlePageSizeChange(event) {
+    updateCatalogParams({ page_size: event.target.value })
+  }
+
+  function changePage(nextPage) {
+    setSearchParams((currentParams) => {
+      const nextParams = new URLSearchParams(currentParams)
+      nextParams.set('page', String(nextPage))
+      return nextParams
+    })
+  }
+
+  return (
+    <PageFrame
+      eyebrow="МАРКЕТПЛЕЙС ОБЪЯВЛЕНИЙ"
+      title={<>Хорошие вещи<br />находятся рядом</>}
+      description="Находим полезное в своём районе: от любимой книги до нового велосипеда."
+    >
+      <section className="catalog-panel" aria-label="Каталог объявлений">
+        <div className="catalog-toolbar">
+          <span className="result-count">
+            {state === 'loading'
+              ? 'Загружаем объявления'
+              : searchQuery || selectedCategoryId
+                ? `Найдено объявлений: ${pagination.total}`
+                : `Опубликованных объявлений: ${pagination.total}`}
+          </span>
+          <label className="catalog-category-filter" htmlFor="catalog-category-filter">
+            <span className="visually-hidden">Фильтр по категории</span>
+            <select
+              disabled={categoryState !== 'ready'}
+              id="catalog-category-filter"
+              onChange={handleCategoryChange}
+              value={selectedCategoryId}
+            >
+              <option value="">Все категории</option>
+              {categories.map((category) => (
+                <option key={category.id} value={String(category.id)}>{category.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="catalog-sort-filter" htmlFor="catalog-sort-filter">
+            <span className="visually-hidden">Сортировка объявлений</span>
+            <select id="catalog-sort-filter" onChange={handleSortChange} value={`${sortBy}:${sortOrder}`}>
+              <option value="published_at:desc">Сначала новые</option>
+              <option value="published_at:asc">Сначала старые</option>
+              <option value="price:asc">Сначала дешевле</option>
+              <option value="price:desc">Сначала дороже</option>
+            </select>
+          </label>
+          <form className="catalog-search" onSubmit={handleSearch} role="search">
+            <label className="visually-hidden" htmlFor="catalog-search-input">Поиск объявлений</label>
+            <input
+              autoComplete="off"
+              id="catalog-search-input"
+              maxLength={100}
+              onChange={(event) => setSearchInput(event.target.value)}
+              placeholder="Название или описание"
+              type="search"
+              value={searchInput}
+            />
+            <button className="button button-primary" type="submit">Найти</button>
+            {searchQuery && <button className="text-button catalog-search-clear" onClick={clearSearch} type="button">Сбросить</button>}
+          </form>
+          <span className="location-pill"><span aria-hidden="true">⌖</span> Город не выбран</span>
+        </div>
+        <div className="catalog-page-size">
+          <label htmlFor="catalog-page-size">На странице</label>
+          <select id="catalog-page-size" onChange={handlePageSizeChange} value={pageSize}>
+            <option value="12">12</option>
+            <option value="24">24</option>
+            <option value="48">48</option>
+          </select>
+        </div>
+        {categoryState === 'loading' && <p className="catalog-filter-status" role="status">Загружаем категории…</p>}
+        {categoryState === 'error' && (
+          <div className="catalog-filter-error" role="alert">
+            <span>Не удалось загрузить категории: {categoryError}</span>
+            <button className="text-button" onClick={() => setCategoryAttempt((value) => value + 1)} type="button">Повторить</button>
+          </div>
+        )}
+        {searchError && <p className="catalog-search-error" role="alert">{searchError}</p>}
+        {state === 'loading' && <div className="catalog-message" role="status">Загружаем каталог…</div>}
+        {state === 'error' && (
+          <div className="empty-state" role="alert">
+            <h2>Не удалось загрузить каталог</h2>
+            <p>{error}</p>
+            <button className="button button-primary" type="button" onClick={() => setAttempt((value) => value + 1)}>Повторить</button>
+          </div>
+        )}
+        {state === 'ready' && listings.length === 0 && (
+          <div className="empty-state">
+            {searchQuery || selectedCategoryId ? (
+              <>
+                <h2>Ничего не найдено</h2>
+                <p>{searchQuery
+                  ? `По запросу «${searchQuery}» нет опубликованных объявлений. Попробуйте изменить запрос или категорию.`
+                  : 'В этой категории пока нет опубликованных объявлений.'}</p>
+              </>
+            ) : (
+              <>
+                <div className="empty-illustration" aria-hidden="true">
+                  <span className="sun"></span>
+                  <span className="package package-back"></span>
+                  <span className="package package-front"></span>
+                  <span className="plant">✳</span>
+                </div>
+                <h2>Пока нет опубликованных объявлений</h2>
+                <p>Загляните позже: новые предложения появятся здесь после проверки.</p>
+                <Link className="button button-primary" to="/listings/new">Разместить объявление</Link>
+              </>
+            )}
+          </div>
+        )}
+        {state === 'ready' && listings.length > 0 && (
+          <>
+            <div className="public-listings">
+              {listings.map((listing) => (
+                <Link className="public-listing-card" key={listing.id} to={`/listings/${listing.id}`}>
+                  {listing.main_photo_url ? (
+                    <img className="public-listing-photo" src={`${API_URL}${listing.main_photo_url}`} alt={listing.title} />
+                  ) : (
+                    <div className="public-listing-photo public-listing-photo--empty" aria-label="Фотографии нет">Фото отсутствует</div>
+                  )}
+                  <div className="public-listing-info">
+                    <p className="public-listing-category">{listing.category}</p>
+                    <h2>{listing.title}</h2>
+                    <p className="public-listing-price">{new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB' }).format(listing.price)}</p>
+                  </div>
+                </Link>
+              ))}
+            </div>
+            <nav className="catalog-pagination" aria-label="Страницы каталога">
+              <button
+                className="button button-secondary"
+                disabled={pagination.page <= 1}
+                onClick={() => changePage(pagination.page - 1)}
+                type="button"
+              >Предыдущая</button>
+              <span>Страница {pagination.page} из {pagination.total_pages}</span>
+              <button
+                className="button button-secondary"
+                disabled={pagination.page >= pagination.total_pages}
+                onClick={() => changePage(pagination.page + 1)}
+                type="button"
+              >Следующая</button>
+            </nav>
+          </>
+        )}
+      </section>
+    </PageFrame>
+  )
+}
+
+function PublicListingPage() {
+  const { listingId } = useParams()
+  const [listing, setListing] = useState(null)
+  const [state, setState] = useState('loading')
+  const [error, setError] = useState('')
+  const [attempt, setAttempt] = useState(0)
+  const [activePhoto, setActivePhoto] = useState(0)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    setState('loading')
+    setListing(null)
+    loadPublicListing(listingId, controller.signal)
+      .then((data) => {
+        setListing(data)
+        setActivePhoto(0)
+        setState('ready')
+      })
+      .catch((requestError) => {
+        if (requestError.name !== 'AbortError') {
+          setError(requestError.message)
+          setState([404, 422].includes(requestError.status) ? 'not-found' : 'error')
+        }
+      })
+    return () => controller.abort()
+  }, [listingId, attempt])
+
+  if (state === 'loading') {
+    return <PageFrame eyebrow="ОБЪЯВЛЕНИЕ" title="Загружаем объявление"><p className="detail-state" role="status">Загружаем описание и фотографии…</p></PageFrame>
+  }
+
+  if (state === 'not-found') {
+    return <NotFoundPage />
+  }
+
+  if (state === 'error') {
+    return (
+      <PageFrame eyebrow="ОБЪЯВЛЕНИЕ" title="Не удалось загрузить объявление">
+        <div className="detail-state detail-state--error" role="alert">
+          <p>{error}</p>
+          <button className="button button-primary" type="button" onClick={() => setAttempt((value) => value + 1)}>Повторить</button>
+        </div>
+      </PageFrame>
+    )
+  }
+
+  const photos = listing.photos || []
+  const selectedPhoto = photos[activePhoto]
+
+  return (
+    <PageFrame eyebrow={listing.category.toLocaleUpperCase('ru-RU')} title={listing.title}>
+      <article className="public-listing-detail">
+        <section className="listing-gallery" aria-label="Фотографии объявления">
+          {selectedPhoto ? (
+            <img className="listing-gallery-main" src={`${API_URL}/media/${selectedPhoto.id}`} alt={`${listing.title}, фото ${activePhoto + 1} из ${photos.length}`} />
+          ) : (
+            <div className="listing-gallery-empty">Фотографии отсутствуют</div>
+          )}
+          {photos.length > 1 && (
+            <div className="listing-gallery-controls" aria-label="Выбор фотографии">
+              {photos.map((photo, index) => (
+                <button
+                  aria-label={`Показать фото ${index + 1}`}
+                  aria-pressed={index === activePhoto}
+                  className={`listing-gallery-thumb${index === activePhoto ? ' listing-gallery-thumb--active' : ''}`}
+                  key={photo.id}
+                  onClick={() => setActivePhoto(index)}
+                  type="button"
+                >
+                  <img src={`${API_URL}/media/${photo.id}`} alt="" />
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+        <section className="listing-detail-copy">
+          <p className="listing-detail-category">{listing.category}</p>
+          <p className="listing-detail-price">{new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB' }).format(listing.price)}</p>
+          <h2>Описание</h2>
+          <p className="listing-detail-description">{listing.description}</p>
+          <div className="listing-detail-author"><span>Автор объявления</span><strong>{listing.author_display_name}</strong></div>
+        </section>
+      </article>
+      <Link className="listing-back-link" to="/">← Вернуться в каталог</Link>
+    </PageFrame>
+  )
+}
+
+function AuthPage({ mode, onAuthenticated }) {
+  const navigate = useNavigate()
+  const isLogin = mode === 'login'
+  const title = isLogin ? 'С возвращением' : 'Создаём аккаунт'
+  const description = isLogin ? 'Управление объявлениями доступно после входа.' : 'Пара минут - и можно делиться находками с соседями.'
+  const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  async function handleSubmit(event) {
+    event.preventDefault()
+    setError('')
+    setSubmitting(true)
+
+    const formData = new FormData(event.currentTarget)
+    const email = formData.get('email')
+    const password = formData.get('password')
+
+    try {
+      let user
+      if (isLogin) {
+        user = await signIn(email, password)
+      } else {
+        user = await registerUser({
+          email,
+          displayName: formData.get('name'),
+          password,
+        })
+      }
+
+      onAuthenticated(user)
+      navigate('/listings/new')
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <PageFrame eyebrow={isLogin ? 'ВХОД' : 'РЕГИСТРАЦИЯ'} title={title} description={description}>
+      <form className="form-card" onSubmit={handleSubmit}>
+        {error && <div className="form-error" role="alert">{error}</div>}
+        {!isLogin && (
+          <label className="field">
+            <span>Как к вам обращаться</span>
+            <input autoComplete="name" name="name" placeholder="Например, Аня" required />
+          </label>
+        )}
+        <label className="field">
+          <span>Электронная почта</span>
+            <input autoComplete="email" name="email" placeholder="name@example.com" required type="email" />
+        </label>
+        <label className="field">
+          <span>Пароль</span>
+          <input autoComplete={isLogin ? 'current-password' : 'new-password'} minLength={isLogin ? undefined : 12} name="password" placeholder="Не менее 12 символов" required type="password" />
+        </label>
+        <button className="button button-primary form-submit" disabled={submitting} type="submit">{submitting ? 'Подождите' : isLogin ? 'Войти' : 'Зарегистрироваться'}</button>
+        <p className="form-switch">
+          {isLogin ? 'Первый раз?' : 'Уже есть аккаунт?'}{' '}
+          <Link to={isLogin ? '/register' : '/login'}>{isLogin ? 'Создать аккаунт' : 'Войти'}</Link>
+        </p>
+      </form>
+    </PageFrame>
+  )
+}
+
+function ModerationPhoto({ submissionId, photo, token, compact = false }) {
+  const [source, setSource] = useState('')
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    let objectUrl
+    fetch(`${API_URL}/moderation/queue/${submissionId}/photos/${photo.id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error('Не удалось загрузить фотографию')
+        return response.blob()
+      })
+      .then((blob) => {
+        objectUrl = URL.createObjectURL(blob)
+        setSource(objectUrl)
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') setFailed(true)
+      })
+    return () => {
+      controller.abort()
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [photo.id, submissionId, token])
+
+  return <figure className={`moderation-photo${compact ? ' moderation-photo--compact' : ''}`}>
+    {source ? <img alt={photo.original_filename} src={source} /> : <div className="moderation-photo-placeholder" aria-label={failed ? 'Фотография недоступна' : 'Загружаем фотографию'}>{failed ? 'Фото недоступно' : 'Загрузка…'}</div>}
+    {!compact && <figcaption>{photo.original_filename}</figcaption>}
+  </figure>
+}
+
+function ModerationQueuePage({ user }) {
+  const [items, setItems] = useState([])
+  const [selected, setSelected] = useState(null)
+  const [checkedRules, setCheckedRules] = useState([])
+  const [decisionReason, setDecisionReason] = useState('')
+  const [decisionInProgress, setDecisionInProgress] = useState(false)
+  const [state, setState] = useState('loading')
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const token = localStorage.getItem('marketplace-token')
+
+  useEffect(() => {
+    if (!user || user.role !== 'moderator') {
+      setState('forbidden')
+      return
+    }
+    const controller = new AbortController()
+    apiRequest('/moderation/queue', { token, signal: controller.signal })
+      .then((data) => { setItems(data); setState('ready') })
+      .catch((requestError) => {
+        if (requestError.name !== 'AbortError') {
+          setError(requestError.status === 401 ? 'Войдите снова, чтобы продолжить.' : requestError.message)
+          setState('error')
+        }
+      })
+    return () => controller.abort()
+  }, [user, token])
+
+  async function openSubmission(id) {
+    setError('')
+    setNotice('')
+    try {
+      const submission = await apiRequest(`/moderation/queue/${id}`, { token })
+      setSelected(submission)
+      setCheckedRules([])
+      setDecisionReason('')
+    } catch (requestError) {
+      setError(requestError.message)
+      if (requestError.status === 404) {
+        setItems((current) => current.filter((item) => item.id !== id))
+        setSelected(null)
+      }
+    }
+  }
+
+  async function submitDecision(decision) {
+    if (!selected) return
+    setError('')
+    setNotice('')
+    setDecisionInProgress(true)
+    try {
+      await decideModeration(selected.id, {
+        decision,
+        reason: decision === 'rejected' ? decisionReason : null,
+        confirmed_rule_ids: decision === 'approved' ? checkedRules : [],
+      })
+      setItems((current) => current.filter((item) => item.id !== selected.id))
+      setSelected(null)
+      setCheckedRules([])
+      setDecisionReason('')
+      setNotice(decision === 'approved' ? 'Объявление опубликовано.' : 'Объявление отклонено.')
+    } catch (requestError) {
+      setError(requestError.message)
+      if (requestError.status === 409) {
+        setItems((current) => current.filter((item) => item.id !== selected.id))
+        setSelected(null)
+        setCheckedRules([])
+      }
+    } finally {
+      setDecisionInProgress(false)
+    }
+  }
+
+  if (state === 'forbidden') {
+    return <PageFrame eyebrow="МОДЕРАЦИЯ" title="Доступ ограничен" description="Очередь доступна только пользователям с ролью модератора.">
+      <Link className="button button-primary" to="/login">Войти под аккаунтом модератора</Link>
+    </PageFrame>
+  }
+
+  return <PageFrame eyebrow="РАБОЧЕЕ МЕСТО МОДЕРАТОРА" title="Очередь объявлений" description="Объявления расположены от самых ранних заявок к новым.">
+    {notice && <p className="form-success" role="status">{notice}</p>}
+    {state === 'loading' && <p className="queue-message" role="status">Загружаем очередь…</p>}
+    {state === 'error' && <div className="queue-message queue-message--error" role="alert">{error}</div>}
+    {state === 'ready' && <div className="moderation-layout">
+      <section className="queue-list" aria-label="Ожидают проверки">
+        <div className="queue-toolbar"><strong>{items.length}</strong><span>ожидают проверки</span></div>
+        {items.length === 0 ? <div className="queue-empty"><h2>Очередь пуста</h2><p>Новые объявления появятся здесь после отправки на проверку.</p></div> : items.map((item) => <article className={`queue-item${selected?.id === item.id ? ' queue-item--selected' : ''}`} key={item.id}>
+          <div className="queue-item-heading"><h2>{item.title}</h2><time dateTime={item.submitted_at}>{new Date(item.submitted_at).toLocaleString('ru-RU')}</time></div>
+          <p className="queue-meta">{item.author.display_name} · {item.category_name}</p>
+          <div className="queue-photos" aria-label={`Фотографий: ${item.photos.length}`}>
+            {item.photos.length ? item.photos.slice(0, 4).map((photo) => <ModerationPhoto compact key={photo.id} photo={photo} submissionId={item.id} token={token} />) : <span className="photo-chip photo-chip--empty">Без фотографий</span>}
+            {item.photos.length > 4 && <span className="photo-chip">+{item.photos.length - 4}</span>}
+          </div>
+          <button className="text-button queue-open" onClick={() => openSubmission(item.id)} type="button">Открыть карточку →</button>
+        </article>)}
+      </section>
+      <section className="submission-panel" aria-label="Карточка объявления" aria-live="polite">
+        {selected ? <>
+          <div className="submission-topline"><span>Версия {selected.version}</span><time dateTime={selected.submitted_at}>{new Date(selected.submitted_at).toLocaleString('ru-RU')}</time></div>
+          <h2>{selected.title}</h2>
+          <p className="submission-price">{new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(selected.price)}</p>
+          <p className="submission-category">{selected.category_name}</p>
+          <p className="submission-description">{selected.description}</p>
+          <div className="submission-author"><strong>{selected.author.display_name}</strong><a href={`mailto:${selected.author.email}`}>{selected.author.email}</a></div>
+          <h3>Фотографии ({selected.photos.length})</h3>
+          <div className="submission-photos">{selected.photos.length ? selected.photos.map((photo) => <ModerationPhoto key={photo.id} photo={photo} submissionId={selected.id} token={token} />) : <p className="queue-muted">Фотографии не приложены.</p>}</div>
+          <section className="moderation-checklist" aria-label="Проверка правил подачи">
+            <h3>Проверка правил</h3>
+            <p>Отметьте пункты, которые проверили перед решением.</p>
+            <ul>{selected.rules.map((rule) => <li key={rule.id}>
+              <label>
+                <input
+                  checked={checkedRules.includes(rule.id)}
+                  onChange={(event) => setCheckedRules((current) => event.target.checked
+                    ? [...current, rule.id]
+                    : current.filter((ruleId) => ruleId !== rule.id))}
+                  type="checkbox"
+                />
+                <span>{rule.label}</span>
+                <small className={rule.passed ? 'rule-state rule-state--passed' : 'rule-state rule-state--failed'}>
+                  {rule.passed ? 'Автопроверка пройдена' : 'Есть нарушение'}
+                </small>
+              </label>
+            </li>)}</ul>
+            <p className="checklist-progress" role="status">
+              {checkedRules.length === selected.rules.length
+                ? 'Все правила отмечены как проверенные.'
+                : `Проверено ${checkedRules.length} из ${selected.rules.length}`}
+            </p>
+            {selected.author.id === user.id ? (
+              <p className="decision-guidance" role="status">Нельзя принимать решение по собственному объявлению.</p>
+            ) : (
+              <div className="moderation-decision-form">
+                <label className="field">
+                  <span>Причина отказа</span>
+                  <textarea
+                    onChange={(event) => setDecisionReason(event.target.value)}
+                    placeholder="Укажите нарушенное правило и поясните причину отказа."
+                    rows={3}
+                    value={decisionReason}
+                  />
+                </label>
+                <p className="decision-guidance">Для отказа нужно назвать правило и объяснить причину.</p>
+                <div className="moderation-actions">
+                  <button
+                    className="button button-primary"
+                    disabled={decisionInProgress || checkedRules.length !== selected.rules.length || selected.rules.some((rule) => !rule.passed)}
+                    onClick={() => submitDecision('approved')}
+                    type="button"
+                  >
+                    {decisionInProgress ? 'Сохраняем…' : 'Одобрить и опубликовать'}
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    disabled={decisionInProgress || !decisionReason.trim()}
+                    onClick={() => submitDecision('rejected')}
+                    type="button"
+                  >
+                    Отклонить
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+        </> : <div className="detail-placeholder"><span aria-hidden="true">↖</span><h2>Выберите объявление</h2><p>Полная карточка и фотографии появятся здесь.</p></div>}
+        {error && <p className="form-error" role="alert">{error}</p>}
+      </section>
+    </div>}
+  </PageFrame>
+}
+
+function PhotoPreview({ listingId, photo }) {
+  const [source, setSource] = useState('')
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    let objectUrl
+    loadListingPhoto(photo.id, controller.signal)
+      .then((blob) => {
+        objectUrl = URL.createObjectURL(blob)
+        setSource(objectUrl)
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') setFailed(true)
+      })
+    return () => {
+      controller.abort()
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [listingId, photo.id])
+
+  return source
+    ? <img alt={`Фото объявления ${listingId}`} src={source} />
+    : <span className="draft-photo-placeholder" role="status">{failed ? 'Фото недоступно' : 'Загружаем фото'}</span>
+}
+
+function DraftPhotoManager({ listingId, photos, onChange }) {
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function handleUpload(event) {
+    const files = [...event.currentTarget.files]
+    event.currentTarget.value = ''
+    if (!files.length) return
+    setError('')
+    setBusy(true)
+    try {
+      let nextPhotos = photos
+      for (const file of files) {
+        const photo = await uploadListingPhoto(listingId, file)
+        nextPhotos = [...nextPhotos, photo].sort((left, right) => left.position - right.position)
+        await onChange(nextPhotos)
+      }
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleReplace(photoId, event) {
+    const file = event.currentTarget.files?.[0]
+    event.currentTarget.value = ''
+    if (!file) return
+    setError('')
+    setBusy(true)
+    try {
+      const replaced = await replaceListingPhoto(listingId, photoId, file)
+      await onChange(photos.map((photo) => photo.id === photoId ? { ...replaced, previewVersion: Date.now() } : photo))
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleDelete(photoId) {
+    setError('')
+    setBusy(true)
+    try {
+      await deleteListingPhoto(listingId, photoId)
+      await onChange(photos.filter((photo) => photo.id !== photoId))
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <section className="draft-photos" aria-label="Фотографии объявления">
+    <div className="draft-photos-heading"><div><h2>Фотографии</h2><p>До 5 файлов, каждый не больше 5 МБ.</p></div><span>{photos.length}/5</span></div>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    {photos.length > 0 && <div className="draft-photo-grid">{photos.map((photo) => <article className="draft-photo-card" key={`${photo.id}-${photo.previewVersion || 0}`}>
+      <PhotoPreview listingId={listingId} photo={photo} />
+      <div className="draft-photo-actions">
+        <label className="text-button">Заменить<input accept="image/jpeg,image/png,image/webp" disabled={busy} onChange={(event) => handleReplace(photo.id, event)} type="file" /></label>
+        <button className="text-button" disabled={busy} onClick={() => handleDelete(photo.id)} type="button">Удалить</button>
+      </div>
+    </article>)}</div>}
+    {photos.length < 5 && <label className="button button-secondary photo-upload">{busy ? 'Сохраняем…' : 'Добавить фото'}<input accept="image/jpeg,image/png,image/webp" disabled={busy} multiple onChange={handleUpload} type="file" /></label>}
+  </section>
+}
+
+function RejectionReason({ listingId }) {
+  const [state, setState] = useState('loading')
+  const [reason, setReason] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    const controller = new AbortController()
+    loadListingHistory(listingId, controller.signal)
+      .then((submissions) => {
+        const rejectedSubmission = [...submissions].reverse().find(
+          (submission) => submission.decision?.status === 'rejected' && submission.decision.reason,
+        )
+        setReason(rejectedSubmission?.decision.reason || '')
+        setState('ready')
+      })
+      .catch((requestError) => {
+        if (requestError.name !== 'AbortError') {
+          setError(requestError.message)
+          setState('error')
+        }
+      })
+    return () => controller.abort()
+  }, [listingId])
+
+  if (state === 'loading') {
+    return <div className="rejection-notice rejection-notice--loading" role="status">Загружаем причину отказа</div>
+  }
+
+  if (state === 'error') {
+    return <div className="rejection-notice rejection-notice--error" role="alert">Не удалось загрузить причину отказа: {error}</div>
+  }
+
+  if (!reason) return null
+
+  return (
+    <section className="rejection-notice" aria-label="Причина отказа">
+      <h2>Причина отказа</h2>
+      <p>{reason}</p>
+    </section>
+  )
+}
+
+function formatDate(value) {
+  if (!value) return 'Дата неизвестна'
+  return new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
+}
+
+function CreateListingPage({ user }) {
+  const { listingId } = useParams()
+  const navigate = useNavigate()
+  const editing = Boolean(listingId)
+  const [categories, setCategories] = useState([])
+  const [submissionRules, setSubmissionRules] = useState([])
+  const [categoryState, setCategoryState] = useState('loading')
+  const [categoryError, setCategoryError] = useState('')
+  const [categoryAttempt, setCategoryAttempt] = useState(0)
+  const [formError, setFormError] = useState('')
+  const [draft, setDraft] = useState(null)
+  const [draftState, setDraftState] = useState(editing ? 'loading' : 'ready')
+  const [photos, setPhotos] = useState([])
+  const [submissionHistory, setSubmissionHistory] = useState([])
+  const [historyState, setHistoryState] = useState('idle')
+  const [historyError, setHistoryError] = useState('')
+  const [createdListing, setCreatedListing] = useState(null)
+  const [attachedPhotoCount, setAttachedPhotoCount] = useState(0)
+  const [validationResult, setValidationResult] = useState(null)
+  const [submitting, setSubmitting] = useState(false)
+  const formRef = useRef(null)
+
+  useEffect(() => {
+    if (!user) {
+      setCategoryState('ready')
+      return undefined
+    }
+
+    const controller = new AbortController()
+    setCategoryState('loading')
+    Promise.all([
+      loadCategories(controller.signal),
+      loadSubmissionRules(controller.signal),
+    ])
+      .then(([items, rules]) => {
+        setCategories(items)
+        setSubmissionRules(rules)
+        setCategoryState('ready')
+        setCategoryError('')
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') {
+          setCategoryState('error')
+          setCategoryError(error.message)
+        }
+      })
+
+    return () => controller.abort()
+  }, [user, categoryAttempt])
+
+  useEffect(() => {
+    if (!user || !listingId) {
+      setDraft(null)
+      setPhotos([])
+      setSubmissionHistory([])
+      setHistoryState('idle')
+      setHistoryError('')
+      setDraftState('ready')
+      return undefined
+    }
+    const controller = new AbortController()
+    setDraftState('loading')
+    setHistoryState('idle')
+    setHistoryError('')
+    loadListing(listingId, controller.signal)
+      .then((listing) => {
+        setDraft(listing)
+        setPhotos(listing.photos || [])
+        setCreatedListing(listing)
+        setAttachedPhotoCount((listing.photos || []).length)
+        setDraftState('ready')
+        if (['draft', 'rejected'].includes(listing.status)) {
+          validateListing(listing.id).then(setValidationResult).catch(() => {})
+        }
+        if (listing.status === 'rejected') {
+          setHistoryState('loading')
+          loadListingHistory(listing.id, controller.signal)
+            .then((history) => {
+              setSubmissionHistory(history)
+              setHistoryState('ready')
+            })
+            .catch((error) => {
+              if (error.name !== 'AbortError') {
+                setHistoryError(error.message)
+                setHistoryState('error')
+              }
+            })
+        } else {
+          setSubmissionHistory([])
+          setHistoryState('idle')
+        }
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') {
+          setFormError(error.message)
+          setDraftState('error')
+        }
+      })
+    return () => controller.abort()
+  }, [user, listingId])
+
+  async function handleSubmit(event) {
+    event.preventDefault()
+    setFormError('')
+    setSubmitting(true)
+
+    const formData = new FormData(event.currentTarget)
+    const imageFiles = formData.getAll('photos').filter((file) => file instanceof File && file.name)
+    if (imageFiles.length > 5) {
+      setFormError('Можно прикрепить не более пяти фотографий.')
+      setSubmitting(false)
+      return
+    }
+    const payload = {
+      title: formData.get('title').trim(),
+      description: formData.get('description').trim(),
+      price: formData.get('price'),
+      category_id: Number(formData.get('category_id')),
+    }
+
+    let savedListing = null
+    try {
+      if (editing) {
+        const listing = await updateListing(listingId, payload)
+        savedListing = listing
+        setDraft(listing)
+        setCreatedListing(listing)
+        setPhotos(listing.photos || [])
+        setValidationResult(await validateListing(listing.id))
+      } else {
+        const listing = await createListing(payload)
+        savedListing = listing
+        setDraft(listing)
+        setCreatedListing(listing)
+        let uploadedCount = 0
+        for (const file of imageFiles) {
+          await uploadListingPhoto(listing.id, file)
+          uploadedCount += 1
+          setAttachedPhotoCount(uploadedCount)
+        }
+        setValidationResult(await validateListing(listing.id))
+        navigate(`/listings/${listing.id}/edit`, { replace: true })
+      }
+    } catch (error) {
+      setFormError(error.message)
+      if (!editing && savedListing) {
+        navigate(`/listings/${savedListing.id}/edit`, { replace: true })
+      }
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleSubmitToModeration() {
+    if (!createdListing) return
+    setSubmitting(true)
+    setFormError('')
+    try {
+      let listing = createdListing
+      if (editing && formRef.current) {
+        const formData = new FormData(formRef.current)
+        listing = await updateListing(listing.id, {
+          title: formData.get('title').trim(),
+          description: formData.get('description').trim(),
+          price: formData.get('price'),
+          category_id: Number(formData.get('category_id')),
+        })
+        setDraft(listing)
+        setCreatedListing(listing)
+      }
+      const result = await validateListing(listing.id)
+      setValidationResult(result)
+      if (!result.valid) {
+        setFormError('Перед подачей исправьте нарушения в списке ниже.')
+        return
+      }
+      const submitted = await submitListing(listing.id)
+      setCreatedListing(submitted)
+      setDraft(submitted)
+      navigate('/my-listings')
+    } catch (requestError) {
+      const violations = requestError.data?.detail?.violations
+      if (violations) {
+        setValidationResult({ valid: false, violations, rules: submissionRules })
+        setFormError('Перед подачей исправьте нарушения в списке ниже.')
+      } else {
+        setFormError(requestError.message)
+      }
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  if (!user) {
+    return (
+      <PageFrame eyebrow="НОВОЕ ОБЪЯВЛЕНИЕ" title="Создание объявления доступно после входа" description="Объявления сохраняются в личном кабинете.">
+        <Link className="button button-primary" to="/login">Войти</Link>
+      </PageFrame>
+    )
+  }
+
+  if (draftState === 'loading') {
+    return <PageFrame eyebrow="ЧЕРНОВИК" title="Загружаем объявление"><div className="form-status" role="status">Загружаем данные черновика</div></PageFrame>
+  }
+  if (draftState === 'error') {
+    return <PageFrame eyebrow="ЧЕРНОВИК" title="Не удалось открыть объявление"><div className="form-error" role="alert">{formError}</div><Link className="button button-secondary" to="/my-listings">К моим объявлениям</Link></PageFrame>
+  }
+  if (editing && draft && !['draft', 'rejected'].includes(draft.status)) {
+    return <PageFrame eyebrow="ОБЪЯВЛЕНИЕ" title="Редактирование недоступно" description={`Статус: ${LISTING_STATUS_LABELS[draft.status] || draft.status}. Последнее изменение: ${formatDate(draft.updated_at)}.`}><Link className="button button-secondary" to="/my-listings">К моим объявлениям</Link></PageFrame>
+  }
+
+  return (
+    <PageFrame eyebrow={editing ? 'РЕДАКТИРОВАНИЕ ЧЕРНОВИКА' : 'НОВОЕ ОБЪЯВЛЕНИЕ'} title={editing ? 'Продолжим подготовку' : 'Дадим вещи вторую жизнь'} description={editing ? 'Изменения сохраняются как черновик и не отправляют объявление на модерацию.' : 'Опишите вещь и сохраните объявление как черновик.'}>
+      <form className="form-card listing-form" onSubmit={handleSubmit} ref={formRef}>
+        {editing && draft?.status === 'rejected' && <RejectionReason listingId={draft.id} />}
+        {categoryState === 'loading' && <div className="form-status" role="status">Загружаем категории</div>}
+        {categoryState === 'error' && <div className="form-error" role="alert">Не удалось загрузить категории: {categoryError}</div>}
+        {categoryState === 'error' && <button className="text-button category-retry" onClick={() => setCategoryAttempt((value) => value + 1)} type="button">Загрузить категории ещё раз</button>}
+        {categoryState === 'ready' && categories.length === 0 && <div className="form-error" role="alert">Активные категории пока не найдены. Сохранение объявления временно недоступно.</div>}
+        {formError && <div className="form-error" role="alert">{formError}</div>}
+        {createdListing && (
+          <div className="form-success" role="status">
+            <strong>{createdListing.status === 'pending' ? 'Объявление отправлено' : 'Черновик сохранён'}</strong>
+            <span>Статус: {LISTING_STATUS_LABELS[createdListing.status] || createdListing.status}</span>
+            <span>Фотографий: {attachedPhotoCount}</span>
+          </div>
+        )}
+        {submissionRules.length > 0 && <section className="submission-rules" aria-label="Правила перед подачей">
+          <h2>Проверьте перед подачей</h2>
+          <ul>{submissionRules.map((rule) => <li key={rule.id}>{rule.label}</li>)}</ul>
+        </section>}
+        {editing && draft && <div className="form-status" role="status">Статус: {LISTING_STATUS_LABELS[draft.status] || draft.status}. Изменено: {formatDate(draft.updated_at)}</div>}
+        {editing && draft?.status === 'rejected' && <section className="listing-history" aria-label="История решений модератора">
+          <h2>Решения модератора</h2>
+          {historyState === 'loading' && <p role="status">Загружаем историю подачи…</p>}
+          {historyState === 'error' && <p className="form-error" role="alert">Не удалось загрузить историю: {historyError}</p>}
+          {historyState === 'ready' && submissionHistory.filter((submission) => submission.decision).length === 0 && <p>Решений по объявлению пока нет.</p>}
+          {historyState === 'ready' && submissionHistory.filter((submission) => submission.decision).map((submission) => (
+            <article className="listing-history-entry" key={submission.id}>
+              <div><strong>{submission.decision.status === 'rejected' ? 'Отклонено' : 'Одобрено'} · версия {submission.version}</strong><time dateTime={submission.decision.decided_at}>{formatDate(submission.decision.decided_at)}</time></div>
+              {submission.decision.reason && <p><strong>Причина:</strong> {submission.decision.reason}</p>}
+            </article>
+          ))}
+        </section>}
+        <label className="field">
+          <span>Название</span>
+          <input defaultValue={draft?.title || ''} maxLength={200} name="title" placeholder="Например, городской велосипед" required />
+        </label>
+        <label className="field">
+          <span>Категория</span>
+          <select defaultValue={draft?.category_id || ''} name="category_id" required>
+            <option disabled value="">Категория не выбрана</option>
+            {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+          </select>
+        </label>
+        <label className="field">
+          <span>Описание</span>
+          <textarea defaultValue={draft?.description || ''} maxLength={5000} name="description" placeholder="Состояние, особенности и где забрать" rows="4" required />
+        </label>
+        <label className="field">
+          <span>Цена, ₽</span>
+          <input defaultValue={draft?.price || ''} min="0" name="price" placeholder="0" required step="0.01" type="number" />
+        </label>
+        {editing && draft && <DraftPhotoManager listingId={draft.id} onChange={async (nextPhotos) => {
+          setPhotos(nextPhotos)
+          const updated = await loadListing(draft.id)
+          setDraft(updated)
+          setCreatedListing(updated)
+          setAttachedPhotoCount((updated.photos || []).length)
+          setValidationResult(await validateListing(updated.id))
+        }} photos={photos} />}
+        {!editing && <label className="field">
+          <span>Фотографии</span>
+          <input accept="image/jpeg,image/png,image/webp" multiple name="photos" type="file" />
+          <small>От одной до пяти фотографий. Размер каждого файла до 5 МБ.</small>
+        </label>}
+        <button className="button button-primary form-submit" disabled={categoryState !== 'ready' || categories.length === 0 || submitting} type="submit">{submitting ? 'Сохраняем' : editing ? 'Сохранить изменения' : 'Сохранить черновик'}</button>
+        <button className="button button-secondary form-submit" disabled={!createdListing || submitting} onClick={handleSubmitToModeration} type="button">{submitting ? 'Проверяем' : 'Подать на модерацию'}</button>
+        {validationResult && !validationResult.valid && <div className="validation-results" role="alert">
+          <strong>Найдены нарушения</strong>
+          <ul>{validationResult.violations.map((violation) => <li key={`${violation.rule_id}-${violation.field}`}><b>{violation.field}:</b> {violation.message}</li>)}</ul>
+        </div>}
+        <p className="form-note">Сохранение оставляет объявление черновиком. Подача запускает обязательные проверки.</p>
+      </form>
+    </PageFrame>
+  )
+}
+
+function MyListingsPage({ user }) {
+  const [listings, setListings] = useState([])
+  const [state, setState] = useState('loading')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!user) {
+      setState('ready')
+      return undefined
+    }
+
+    const controller = new AbortController()
+    loadMyListings(controller.signal)
+      .then((items) => {
+        setListings(items)
+        setState('ready')
+      })
+      .catch((requestError) => {
+        if (requestError.name !== 'AbortError') {
+          setError(requestError.message)
+          setState('error')
+        }
+      })
+
+    return () => controller.abort()
+  }, [user])
+
+  return (
+    <PageFrame eyebrow="ЛИЧНЫЙ КАБИНЕТ" title="Мои объявления" description="Здесь будут храниться черновики и опубликованные объявления.">
+      {error && <div className="form-error" role="alert">{error}</div>}
+      {state === 'loading' && user && <div className="form-status" role="status">Загружаем объявления</div>}
+      {state === 'ready' && listings.length > 0 && (
+        <section aria-label="Список объявлений" className="listing-list">
+          {listings.map((listing) => (
+            <article className="listing-card" key={listing.id}>
+              <div className="listing-card-content"><h2>{listing.title || 'Без названия'}</h2><p>{listing.description || 'Описание пока не заполнено.'}</p>{listing.status === 'rejected' && <RejectionReason listingId={listing.id} />}<time dateTime={listing.updated_at}>Изменено {formatDate(listing.updated_at)}</time></div>
+              <div className="listing-card-actions"><span className="status-pill">{LISTING_STATUS_LABELS[listing.status] || listing.status}</span>{['draft', 'rejected'].includes(listing.status) && <Link className="text-button" to={`/listings/${listing.id}/edit`}>Продолжить редактирование</Link>}</div>
+            </article>
+          ))}
+        </section>
+      )}
+      {(state === 'ready' && listings.length === 0) || !user ? (
+        <section className="empty-card">
+          <span className="empty-icon" aria-hidden="true">＋</span>
+          <h2>{user ? 'Пока нет объявлений' : 'Для просмотра нужен вход'}</h2>
+          <p>{user ? 'Начнём с первой вещи: объявление подготовится за пару минут.' : 'После входа появятся черновики и публикации.'}</p>
+          <Link className="button button-primary" to={user ? '/listings/new' : '/login'}>{user ? 'Создать объявление' : 'Войти'}</Link>
+        </section>
+      ) : null}
+    </PageFrame>
+  )
+}
+
+function NotFoundPage() {
+  return (
+    <PageFrame eyebrow="СТРАНИЦА НЕ НАЙДЕНА" title="Похоже, мы заблудились" description="Такой страницы нет, но хорошие находки всё ещё рядом.">
+      <Link className="button button-primary" to="/">Вернуться в каталог</Link>
+    </PageFrame>
+  )
+}
+
+export default function App() {
+  const [user, setUser] = useState(readUser)
+
+  useEffect(() => {
+    function syncUser() {
+      setUser(readUser())
+    }
+
+    window.addEventListener('storage', syncUser)
+    window.addEventListener('marketplace:user-change', syncUser)
+    return () => {
+      window.removeEventListener('storage', syncUser)
+      window.removeEventListener('marketplace:user-change', syncUser)
+    }
+  }, [])
+
+  return (
+    <div className="app-shell">
+      <Header user={user} />
+      <ApiStatus />
+      <Routes>
+        <Route element={<CatalogPage />} path="/" />
+        <Route element={<AuthPage mode="login" onAuthenticated={setUser} />} path="/login" />
+        <Route element={<AuthPage mode="register" onAuthenticated={setUser} />} path="/register" />
+        <Route element={<CreateListingPage user={user} />} path="/listings/new" />
+        <Route element={<PublicListingPage />} path="/listings/:listingId" />
+        <Route element={<CreateListingPage user={user} />} path="/listings/:listingId/edit" />
+        <Route element={<MyListingsPage user={user} />} path="/my-listings" />
+        <Route element={<ModerationQueuePage user={user} />} path="/moderation" />
+        <Route element={<NotFoundPage />} path="*" />
+      </Routes>
+      <footer className="site-footer">
+        <span>рядом © 2026</span>
+        <span>Маленькие находки меняют день</span>
+        <span className="api-address">API: {API_URL}</span>
+      </footer>
+    </div>
+  )
+}

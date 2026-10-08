@@ -36,6 +36,16 @@ cp backend/.env.example backend/.env
 
 Настройки процесса имеют приоритет над `backend/.env`. Файл окружения ищется относительно каталога backend, независимо от рабочей директории. После изменения настроек перезапускаем сервер. Файлы `.env` и виртуальное окружение исключены из Git, секреты передаём через окружение.
 
+## Регистрируемся и входим
+
+Для подписи access-токенов задаём `MARKETPLACE_AUTH_SECRET_KEY`. Создаём значение командой `openssl rand -hex 32` и сохраняем его в `backend/.env`; секрет должен содержать не меньше 32 символов. Время жизни токена задаёт `MARKETPLACE_AUTH_ACCESS_TOKEN_TTL_MINUTES`, по умолчанию 30 минут.
+
+Отправляем `POST /auth/register` с полями `email`, `display_name` и `password`. Пароль должен содержать от 12 до 128 символов. Публичная регистрация всегда создаёт пользователя с ролью `user`; повторный email возвращает HTTP 409. Пароль хранится как хеш Argon2id.
+
+Входим через `POST /auth/login` с полями `email` и `password`. Ответ содержит bearer access-токен. Запрос `GET /auth/me` требует заголовок `Authorization: Bearer <токен>` и возвращает текущего пользователя. Неверный, просроченный или отсутствующий токен возвращает HTTP 401. Зависимость `ModeratorUser` закрывает операции для роли `moderator` и возвращает HTTP 403 для обычного пользователя.
+
+Первого модератора создаём отдельной командой. Заполняем в `backend/.env` переменные `MARKETPLACE_MODERATOR_EMAIL`, `MARKETPLACE_MODERATOR_DISPLAY_NAME` и `MARKETPLACE_MODERATOR_PASSWORD`, затем запускаем `uv run --project backend --frozen --directory backend python -m app.create_moderator`. Пароль команды проходит ту же проверку длины и сохраняется в виде хеша.
+
 Используем [настройки FastAPI](https://fastapi.tiangolo.com/advanced/settings/) и [CORSMiddleware](https://fastapi.tiangolo.com/tutorial/cors/). CORS разрешает запросы браузера с указанных адресов и не заменяет авторизацию API.
 
 ## Проверяем backend

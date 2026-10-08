@@ -1,10 +1,10 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import CurrentUser, DatabaseSession
@@ -118,6 +118,14 @@ class PublicListingResponse(BaseModel):
     price: Decimal
     category: str
     main_photo_url: str | None
+
+
+class PublicListingPageResponse(BaseModel):
+    items: list[PublicListingResponse]
+    page: int
+    page_size: int
+    total: int
+    total_pages: int
 
 
 class PublicListingPhotoResponse(BaseModel):
@@ -396,18 +404,17 @@ def submit_listing(
     return listing
 
 
-@router.get("", response_model=list[PublicListingResponse])
+@router.get("", response_model=PublicListingPageResponse)
 def list_published_listings(
     session: DatabaseSession,
     q: Annotated[str | None, Query(max_length=100)] = None,
     category_id: Annotated[int | None, Query(gt=0)] = None,
-) -> list[PublicListingResponse]:
-    statement = (
-        select(Listing)
-        .where(Listing.status == ListingStatus.PUBLISHED)
-        .options(selectinload(Listing.category), selectinload(Listing.photos))
-        .order_by(Listing.published_at.desc(), Listing.id.desc())
-    )
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=50)] = 12,
+    sort_by: Literal["published_at", "price"] = "published_at",
+    sort_order: Literal["asc", "desc"] = "desc",
+) -> PublicListingPageResponse:
+    filters = [Listing.status == ListingStatus.PUBLISHED]
 
     if q is not None:
         normalized_query = q.strip()
@@ -423,7 +430,7 @@ def list_published_listings(
             .replace("_", "\\_")
         )
         pattern = f"%{escaped_query}%"
-        statement = statement.where(
+        filters.append(
             or_(
                 Listing.title.ilike(pattern, escape="\\"),
                 Listing.description.ilike(pattern, escape="\\"),
@@ -431,12 +438,29 @@ def list_published_listings(
         )
 
     if category_id is not None:
-        statement = statement.where(
+        filters.append(
             Listing.category.has(
                 Category.id == category_id,
                 Category.is_active.is_(True),
             )
         )
 
+    total = session.scalar(select(func.count(Listing.id)).where(*filters)) or 0
+    sort_column = Listing.price if sort_by == "price" else Listing.published_at
+    sort_expression = sort_column.asc() if sort_order == "asc" else sort_column.desc()
+    statement = (
+        select(Listing)
+        .where(*filters)
+        .options(selectinload(Listing.category), selectinload(Listing.photos))
+        .order_by(sort_expression, Listing.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
     listings = session.scalars(statement).all()
-    return [public_listing_response(listing) for listing in listings]
+    return PublicListingPageResponse(
+        items=[public_listing_response(listing) for listing in listings],
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=(total + page_size - 1) // page_size,
+    )

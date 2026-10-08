@@ -119,8 +119,15 @@ function PageFrame({ eyebrow, title, description, children }) {
 
 function CatalogPage() {
   const [searchParams, setSearchParams] = useSearchParams()
+  const paramsString = searchParams.toString()
+  const searchQuery = searchParams.get('q') || ''
   const selectedCategoryId = searchParams.get('category_id') || ''
+  const page = searchParams.get('page') || '1'
+  const pageSize = searchParams.get('page_size') || '12'
+  const sortBy = searchParams.get('sort_by') || 'published_at'
+  const sortOrder = searchParams.get('sort_order') || 'desc'
   const [listings, setListings] = useState([])
+  const [pagination, setPagination] = useState({ page: 1, page_size: 12, total: 0, total_pages: 0 })
   const [state, setState] = useState('loading')
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
@@ -128,9 +135,30 @@ function CatalogPage() {
   const [categoryState, setCategoryState] = useState('loading')
   const [categoryError, setCategoryError] = useState('')
   const [categoryAttempt, setCategoryAttempt] = useState(0)
-  const [searchInput, setSearchInput] = useState('')
-  const [searchQuery, setSearchQuery] = useState('')
+  const [searchInput, setSearchInput] = useState(searchQuery)
   const [searchError, setSearchError] = useState('')
+
+  useEffect(() => {
+    const nextParams = new URLSearchParams(paramsString)
+    let changed = false
+    const defaults = {
+      page: '1',
+      page_size: '12',
+      sort_by: 'published_at',
+      sort_order: 'desc',
+    }
+    Object.entries(defaults).forEach(([key, value]) => {
+      if (!nextParams.has(key)) {
+        nextParams.set(key, value)
+        changed = true
+      }
+    })
+    if (changed) setSearchParams(nextParams, { replace: true })
+  }, [paramsString, setSearchParams])
+
+  useEffect(() => {
+    setSearchInput(searchQuery)
+  }, [searchQuery])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -152,9 +180,27 @@ function CatalogPage() {
   useEffect(() => {
     const controller = new AbortController()
     setState('loading')
-    loadPublicListings(controller.signal, searchQuery, selectedCategoryId)
+    loadPublicListings(controller.signal, {
+      q: searchQuery,
+      category_id: selectedCategoryId,
+      page,
+      page_size: pageSize,
+      sort_by: sortBy,
+      sort_order: sortOrder,
+      })
       .then((data) => {
-        setListings(data)
+        const lastPage = Math.max(data.total_pages, 1)
+        const validPage = Math.min(data.page, lastPage)
+        if (validPage !== data.page) {
+          setSearchParams((currentParams) => {
+            const nextParams = new URLSearchParams(currentParams)
+            nextParams.set('page', String(validPage))
+            return nextParams
+          }, { replace: true })
+          return
+        }
+        setListings(data.items)
+        setPagination(data)
         setState('ready')
       })
       .catch((requestError) => {
@@ -164,19 +210,26 @@ function CatalogPage() {
         }
       })
     return () => controller.abort()
-  }, [attempt, searchQuery, selectedCategoryId])
+  }, [attempt, paramsString, page, pageSize, searchQuery, selectedCategoryId, sortBy, sortOrder])
+
+  function updateCatalogParams(updates) {
+    setSearchParams((currentParams) => {
+      const nextParams = new URLSearchParams(currentParams)
+      Object.entries(updates).forEach(([key, value]) => {
+        if (value === null || value === '') {
+          nextParams.delete(key)
+        } else {
+          nextParams.set(key, String(value))
+        }
+      })
+      nextParams.set('page', '1')
+      return nextParams
+    })
+  }
 
   function handleCategoryChange(event) {
     const categoryId = event.target.value
-    setSearchParams((currentParams) => {
-      const nextParams = new URLSearchParams(currentParams)
-      if (categoryId) {
-        nextParams.set('category_id', categoryId)
-      } else {
-        nextParams.delete('category_id')
-      }
-      return nextParams
-    })
+    updateCatalogParams({ category_id: categoryId })
   }
 
   function handleSearch(event) {
@@ -191,13 +244,30 @@ function CatalogPage() {
       return
     }
     setSearchError('')
-    setSearchQuery(normalizedQuery)
+    updateCatalogParams({ q: normalizedQuery })
   }
 
   function clearSearch() {
     setSearchInput('')
-    setSearchQuery('')
     setSearchError('')
+    updateCatalogParams({ q: null })
+  }
+
+  function handleSortChange(event) {
+    const [nextSortBy, nextSortOrder] = event.target.value.split(':')
+    updateCatalogParams({ sort_by: nextSortBy, sort_order: nextSortOrder })
+  }
+
+  function handlePageSizeChange(event) {
+    updateCatalogParams({ page_size: event.target.value })
+  }
+
+  function changePage(nextPage) {
+    setSearchParams((currentParams) => {
+      const nextParams = new URLSearchParams(currentParams)
+      nextParams.set('page', String(nextPage))
+      return nextParams
+    })
   }
 
   return (
@@ -212,8 +282,8 @@ function CatalogPage() {
             {state === 'loading'
               ? 'Загружаем объявления'
               : searchQuery || selectedCategoryId
-                ? `Найдено объявлений: ${listings.length}`
-                : `Опубликованных объявлений: ${listings.length}`}
+                ? `Найдено объявлений: ${pagination.total}`
+                : `Опубликованных объявлений: ${pagination.total}`}
           </span>
           <label className="catalog-category-filter" htmlFor="catalog-category-filter">
             <span className="visually-hidden">Фильтр по категории</span>
@@ -227,6 +297,15 @@ function CatalogPage() {
               {categories.map((category) => (
                 <option key={category.id} value={String(category.id)}>{category.name}</option>
               ))}
+            </select>
+          </label>
+          <label className="catalog-sort-filter" htmlFor="catalog-sort-filter">
+            <span className="visually-hidden">Сортировка объявлений</span>
+            <select id="catalog-sort-filter" onChange={handleSortChange} value={`${sortBy}:${sortOrder}`}>
+              <option value="published_at:desc">Сначала новые</option>
+              <option value="published_at:asc">Сначала старые</option>
+              <option value="price:asc">Сначала дешевле</option>
+              <option value="price:desc">Сначала дороже</option>
             </select>
           </label>
           <form className="catalog-search" onSubmit={handleSearch} role="search">
@@ -244,6 +323,14 @@ function CatalogPage() {
             {searchQuery && <button className="text-button catalog-search-clear" onClick={clearSearch} type="button">Сбросить</button>}
           </form>
           <span className="location-pill"><span aria-hidden="true">⌖</span> Город не выбран</span>
+        </div>
+        <div className="catalog-page-size">
+          <label htmlFor="catalog-page-size">На странице</label>
+          <select id="catalog-page-size" onChange={handlePageSizeChange} value={pageSize}>
+            <option value="12">12</option>
+            <option value="24">24</option>
+            <option value="48">48</option>
+          </select>
         </div>
         {categoryState === 'loading' && <p className="catalog-filter-status" role="status">Загружаем категории…</p>}
         {categoryState === 'error' && (
@@ -263,10 +350,12 @@ function CatalogPage() {
         )}
         {state === 'ready' && listings.length === 0 && (
           <div className="empty-state">
-            {searchQuery ? (
+            {searchQuery || selectedCategoryId ? (
               <>
                 <h2>Ничего не найдено</h2>
-                <p>По запросу «{searchQuery}» нет опубликованных объявлений. Попробуйте изменить запрос.</p>
+                <p>{searchQuery
+                  ? `По запросу «${searchQuery}» нет опубликованных объявлений. Попробуйте изменить запрос или категорию.`
+                  : 'В этой категории пока нет опубликованных объявлений.'}</p>
               </>
             ) : (
               <>
@@ -284,22 +373,39 @@ function CatalogPage() {
           </div>
         )}
         {state === 'ready' && listings.length > 0 && (
-          <div className="public-listings">
-            {listings.map((listing) => (
-              <Link className="public-listing-card" key={listing.id} to={`/listings/${listing.id}`}>
-                {listing.main_photo_url ? (
-                  <img className="public-listing-photo" src={`${API_URL}${listing.main_photo_url}`} alt={listing.title} />
-                ) : (
-                  <div className="public-listing-photo public-listing-photo--empty" aria-label="Фотографии нет">Фото отсутствует</div>
-                )}
-                <div className="public-listing-info">
-                  <p className="public-listing-category">{listing.category}</p>
-                  <h2>{listing.title}</h2>
-                  <p className="public-listing-price">{new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB' }).format(listing.price)}</p>
-                </div>
-              </Link>
-            ))}
-          </div>
+          <>
+            <div className="public-listings">
+              {listings.map((listing) => (
+                <Link className="public-listing-card" key={listing.id} to={`/listings/${listing.id}`}>
+                  {listing.main_photo_url ? (
+                    <img className="public-listing-photo" src={`${API_URL}${listing.main_photo_url}`} alt={listing.title} />
+                  ) : (
+                    <div className="public-listing-photo public-listing-photo--empty" aria-label="Фотографии нет">Фото отсутствует</div>
+                  )}
+                  <div className="public-listing-info">
+                    <p className="public-listing-category">{listing.category}</p>
+                    <h2>{listing.title}</h2>
+                    <p className="public-listing-price">{new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB' }).format(listing.price)}</p>
+                  </div>
+                </Link>
+              ))}
+            </div>
+            <nav className="catalog-pagination" aria-label="Страницы каталога">
+              <button
+                className="button button-secondary"
+                disabled={pagination.page <= 1}
+                onClick={() => changePage(pagination.page - 1)}
+                type="button"
+              >Предыдущая</button>
+              <span>Страница {pagination.page} из {pagination.total_pages}</span>
+              <button
+                className="button button-secondary"
+                disabled={pagination.page >= pagination.total_pages}
+                onClick={() => changePage(pagination.page + 1)}
+                type="button"
+              >Следующая</button>
+            </nav>
+          </>
         )}
       </section>
     </PageFrame>

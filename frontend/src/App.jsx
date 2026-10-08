@@ -12,6 +12,7 @@ import {
   loadListingPhoto,
   loadCategories,
   loadMyListings,
+  loadListingHistory,
   loadPublicListing,
   loadSubmissionRules,
   loadPublicListings,
@@ -757,6 +758,48 @@ function DraftPhotoManager({ listingId, photos, onChange }) {
   </section>
 }
 
+function RejectionReason({ listingId }) {
+  const [state, setState] = useState('loading')
+  const [reason, setReason] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    const controller = new AbortController()
+    loadListingHistory(listingId, controller.signal)
+      .then((submissions) => {
+        const rejectedSubmission = [...submissions].reverse().find(
+          (submission) => submission.decision?.status === 'rejected' && submission.decision.reason,
+        )
+        setReason(rejectedSubmission?.decision.reason || '')
+        setState('ready')
+      })
+      .catch((requestError) => {
+        if (requestError.name !== 'AbortError') {
+          setError(requestError.message)
+          setState('error')
+        }
+      })
+    return () => controller.abort()
+  }, [listingId])
+
+  if (state === 'loading') {
+    return <div className="rejection-notice rejection-notice--loading" role="status">Загружаем причину отказа</div>
+  }
+
+  if (state === 'error') {
+    return <div className="rejection-notice rejection-notice--error" role="alert">Не удалось загрузить причину отказа: {error}</div>
+  }
+
+  if (!reason) return null
+
+  return (
+    <section className="rejection-notice" aria-label="Причина отказа">
+      <h2>Причина отказа</h2>
+      <p>{reason}</p>
+    </section>
+  )
+}
+
 function formatDate(value) {
   if (!value) return 'Дата неизвестна'
   return new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
@@ -976,6 +1019,7 @@ function CreateListingPage({ user }) {
   return (
     <PageFrame eyebrow={editing ? 'РЕДАКТИРОВАНИЕ ЧЕРНОВИКА' : 'НОВОЕ ОБЪЯВЛЕНИЕ'} title={editing ? 'Продолжим подготовку' : 'Дадим вещи вторую жизнь'} description={editing ? 'Изменения сохраняются как черновик и не отправляют объявление на модерацию.' : 'Опишите вещь и сохраните объявление как черновик.'}>
       <form className="form-card listing-form" onSubmit={handleSubmit} ref={formRef}>
+        {editing && draft?.status === 'rejected' && <RejectionReason listingId={draft.id} />}
         {categoryState === 'loading' && <div className="form-status" role="status">Загружаем категории</div>}
         {categoryState === 'error' && <div className="form-error" role="alert">Не удалось загрузить категории: {categoryError}</div>}
         {categoryState === 'error' && <button className="text-button category-retry" onClick={() => setCategoryAttempt((value) => value + 1)} type="button">Загрузить категории ещё раз</button>}
@@ -1084,7 +1128,7 @@ function MyListingsPage({ user }) {
         <section aria-label="Список объявлений" className="listing-list">
           {listings.map((listing) => (
             <article className="listing-card" key={listing.id}>
-              <div className="listing-card-content"><h2>{listing.title || 'Без названия'}</h2><p>{listing.description || 'Описание пока не заполнено.'}</p><time dateTime={listing.updated_at}>Изменено {formatDate(listing.updated_at)}</time></div>
+              <div className="listing-card-content"><h2>{listing.title || 'Без названия'}</h2><p>{listing.description || 'Описание пока не заполнено.'}</p>{listing.status === 'rejected' && <RejectionReason listingId={listing.id} />}<time dateTime={listing.updated_at}>Изменено {formatDate(listing.updated_at)}</time></div>
               <div className="listing-card-actions"><span className="status-pill">{LISTING_STATUS_LABELS[listing.status] || listing.status}</span>{['draft', 'rejected'].includes(listing.status) && <Link className="text-button" to={`/listings/${listing.id}/edit`}>Продолжить редактирование</Link>}</div>
             </article>
           ))}

@@ -118,11 +118,14 @@ function CatalogPage() {
   const [state, setState] = useState('loading')
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
+  const [searchInput, setSearchInput] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchError, setSearchError] = useState('')
 
   useEffect(() => {
     const controller = new AbortController()
     setState('loading')
-    loadPublicListings(controller.signal)
+    loadPublicListings(controller.signal, searchQuery)
       .then((data) => {
         setListings(data)
         setState('ready')
@@ -134,7 +137,28 @@ function CatalogPage() {
         }
       })
     return () => controller.abort()
-  }, [attempt])
+  }, [attempt, searchQuery])
+
+  function handleSearch(event) {
+    event.preventDefault()
+    const normalizedQuery = searchInput.trim()
+    if (!normalizedQuery) {
+      setSearchError('Введите текст для поиска.')
+      return
+    }
+    if (normalizedQuery.length > 100) {
+      setSearchError('Запрос должен содержать не более 100 символов.')
+      return
+    }
+    setSearchError('')
+    setSearchQuery(normalizedQuery)
+  }
+
+  function clearSearch() {
+    setSearchInput('')
+    setSearchQuery('')
+    setSearchError('')
+  }
 
   return (
     <PageFrame
@@ -145,10 +169,29 @@ function CatalogPage() {
       <section className="catalog-panel" aria-label="Каталог объявлений">
         <div className="catalog-toolbar">
           <span className="result-count">
-            {state === 'loading' ? 'Загружаем объявления' : `Опубликованных объявлений: ${listings.length}`}
+            {state === 'loading'
+              ? 'Загружаем объявления'
+              : searchQuery
+                ? `Найдено объявлений: ${listings.length}`
+                : `Опубликованных объявлений: ${listings.length}`}
           </span>
+          <form className="catalog-search" onSubmit={handleSearch} role="search">
+            <label className="visually-hidden" htmlFor="catalog-search-input">Поиск объявлений</label>
+            <input
+              autoComplete="off"
+              id="catalog-search-input"
+              maxLength={100}
+              onChange={(event) => setSearchInput(event.target.value)}
+              placeholder="Название или описание"
+              type="search"
+              value={searchInput}
+            />
+            <button className="button button-primary" type="submit">Найти</button>
+            {searchQuery && <button className="text-button catalog-search-clear" onClick={clearSearch} type="button">Сбросить</button>}
+          </form>
           <span className="location-pill"><span aria-hidden="true">⌖</span> Город не выбран</span>
         </div>
+        {searchError && <p className="catalog-search-error" role="alert">{searchError}</p>}
         {state === 'loading' && <div className="catalog-message" role="status">Загружаем каталог…</div>}
         {state === 'error' && (
           <div className="empty-state" role="alert">
@@ -159,15 +202,24 @@ function CatalogPage() {
         )}
         {state === 'ready' && listings.length === 0 && (
           <div className="empty-state">
-            <div className="empty-illustration" aria-hidden="true">
-              <span className="sun"></span>
-              <span className="package package-back"></span>
-              <span className="package package-front"></span>
-              <span className="plant">✳</span>
-            </div>
-            <h2>Пока нет опубликованных объявлений</h2>
-            <p>Загляните позже: новые предложения появятся здесь после проверки.</p>
-            <Link className="button button-primary" to="/listings/new">Разместить объявление</Link>
+            {searchQuery ? (
+              <>
+                <h2>Ничего не найдено</h2>
+                <p>По запросу «{searchQuery}» нет опубликованных объявлений. Попробуйте изменить запрос.</p>
+              </>
+            ) : (
+              <>
+                <div className="empty-illustration" aria-hidden="true">
+                  <span className="sun"></span>
+                  <span className="package package-back"></span>
+                  <span className="package package-front"></span>
+                  <span className="plant">✳</span>
+                </div>
+                <h2>Пока нет опубликованных объявлений</h2>
+                <p>Загляните позже: новые предложения появятся здесь после проверки.</p>
+                <Link className="button button-primary" to="/listings/new">Разместить объявление</Link>
+              </>
+            )}
           </div>
         )}
         {state === 'ready' && listings.length > 0 && (

@@ -60,6 +60,12 @@ h1 { margin-bottom: 18px; font: 700 clamp(36px, 5vw, 58px)/1.08 Manrope, sans-se
 .catalog-panel { min-height: 400px; overflow: hidden; border: 1px solid var(--line); border-radius: 22px; background: var(--paper); }
 .catalog-toolbar { display: flex; min-height: 62px; align-items: center; justify-content: space-between; padding: 0 24px; border-bottom: 1px solid var(--line); }
 .result-count { color: #77796f; font-size: 13px; }
+.catalog-search { display: flex; align-items: center; gap: 8px; }
+.catalog-search input { width: min(32vw, 280px); min-height: 40px; padding: 9px 12px; border: 1px solid #deddd5; border-radius: 999px; background: #fff; color: var(--ink); font-size: 12px; }
+.catalog-search .button { min-height: 40px; padding: 0 15px; font-size: 12px; }
+.catalog-search-clear { font-size: 12px; }
+.catalog-search-error { margin: 10px 24px 0; color: #a34436; font-size: 12px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
 .location-pill { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 999px; background: #f2f0e9; color: #62655d; font-size: 12px; font-weight: 600; }
 .location-pill span { color: var(--green); font-size: 17px; }
 .empty-state { min-height: 337px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 28px; text-align: center; }
@@ -206,7 +212,10 @@ h1 { margin-bottom: 18px; font: 700 clamp(36px, 5vw, 58px)/1.08 Manrope, sans-se
   h1 { margin-bottom: 14px; font-size: clamp(36px, 10vw, 48px); letter-spacing: -1.7px; }
   .page-description { font-size: 14px; }
   .catalog-panel { min-height: 370px; border-radius: 17px; }
-  .catalog-toolbar { min-height: 57px; gap: 8px; padding: 0 13px; }
+  .catalog-toolbar { min-height: 57px; align-items: flex-start; flex-direction: column; gap: 8px; padding: 13px; }
+  .catalog-search { width: 100%; flex-wrap: wrap; }
+  .catalog-search input { width: auto; min-width: 0; flex: 1; }
+  .catalog-search-error { margin: 10px 13px 0; }
   .result-count { max-width: 180px; font-size: 11px; }
   .location-pill { padding: 7px 9px; font-size: 11px; }
   .empty-state { min-height: 310px; padding: 22px 17px; }

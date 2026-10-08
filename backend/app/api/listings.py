@@ -1,9 +1,10 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import CurrentUser, DatabaseSession
@@ -338,12 +339,37 @@ def submit_listing(
 
 
 @router.get("", response_model=list[PublicListingResponse])
-def list_published_listings(session: DatabaseSession) -> list[PublicListingResponse]:
+def list_published_listings(
+    session: DatabaseSession,
+    q: Annotated[str | None, Query(max_length=100)] = None,
+) -> list[PublicListingResponse]:
     statement = (
         select(Listing)
         .where(Listing.status == ListingStatus.PUBLISHED)
         .options(selectinload(Listing.category), selectinload(Listing.photos))
         .order_by(Listing.published_at.desc(), Listing.id.desc())
     )
+
+    if q is not None:
+        normalized_query = q.strip()
+        if not normalized_query:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={"field": "q", "message": "Search query cannot be empty"},
+            )
+
+        escaped_query = (
+            normalized_query.replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        pattern = f"%{escaped_query}%"
+        statement = statement.where(
+            or_(
+                Listing.title.ilike(pattern, escape="\\"),
+                Listing.description.ilike(pattern, escape="\\"),
+            )
+        )
+
     listings = session.scalars(statement).all()
     return [public_listing_response(listing) for listing in listings]

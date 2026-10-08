@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 import {
   API_URL,
+  apiRequest,
   checkApiHealth,
   createListing,
   loadCategories,
@@ -75,6 +76,7 @@ function Header({ user }) {
           <>
             <NavLink to="/listings/new">Разместить</NavLink>
             <NavLink to="/my-listings">Мои объявления</NavLink>
+            {user.role === 'moderator' && <NavLink to="/moderation">Модерация</NavLink>}
             <span className="user-label">{user.name || 'Мой профиль'}</span>
           </>
         ) : (
@@ -129,7 +131,7 @@ function CatalogPage() {
   )
 }
 
-function AuthPage({ mode }) {
+function AuthPage({ mode, onAuthenticated }) {
   const navigate = useNavigate()
   const isLogin = mode === 'login'
   const title = isLogin ? 'С возвращением' : 'Создаём аккаунт'
@@ -147,16 +149,18 @@ function AuthPage({ mode }) {
     const password = formData.get('password')
 
     try {
+      let user
       if (isLogin) {
-        await signIn(email, password)
+        user = await signIn(email, password)
       } else {
-        await registerUser({
+        user = await registerUser({
           email,
           displayName: formData.get('name'),
           password,
         })
       }
 
+      onAuthenticated(user)
       navigate('/listings/new')
     } catch (requestError) {
       setError(requestError.message)
@@ -181,7 +185,7 @@ function AuthPage({ mode }) {
         </label>
         <label className="field">
           <span>Пароль</span>
-            <input autoComplete={isLogin ? 'current-password' : 'new-password'} minLength={isLogin ? undefined : 12} name="password" placeholder="Не менее 12 символов" required type="password" />
+          <input autoComplete={isLogin ? 'current-password' : 'new-password'} minLength={isLogin ? undefined : 12} name="password" placeholder="Не менее 12 символов" required type="password" />
         </label>
         <button className="button button-primary form-submit" disabled={submitting} type="submit">{submitting ? 'Подождите' : isLogin ? 'Войти' : 'Зарегистрироваться'}</button>
         <p className="form-switch">
@@ -191,6 +195,116 @@ function AuthPage({ mode }) {
       </form>
     </PageFrame>
   )
+}
+
+function ModerationPhoto({ submissionId, photo, token, compact = false }) {
+  const [source, setSource] = useState('')
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    let objectUrl
+    fetch(`${API_URL}/moderation/queue/${submissionId}/photos/${photo.id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error('Не удалось загрузить фотографию')
+        return response.blob()
+      })
+      .then((blob) => {
+        objectUrl = URL.createObjectURL(blob)
+        setSource(objectUrl)
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') setFailed(true)
+      })
+    return () => {
+      controller.abort()
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [photo.id, submissionId, token])
+
+  return <figure className={`moderation-photo${compact ? ' moderation-photo--compact' : ''}`}>
+    {source ? <img alt={photo.original_filename} src={source} /> : <div className="moderation-photo-placeholder" aria-label={failed ? 'Фотография недоступна' : 'Загружаем фотографию'}>{failed ? 'Фото недоступно' : 'Загрузка…'}</div>}
+    {!compact && <figcaption>{photo.original_filename}</figcaption>}
+  </figure>
+}
+
+function ModerationQueuePage({ user }) {
+  const [items, setItems] = useState([])
+  const [selected, setSelected] = useState(null)
+  const [state, setState] = useState('loading')
+  const [error, setError] = useState('')
+  const token = localStorage.getItem('marketplace-token')
+
+  useEffect(() => {
+    if (!user || user.role !== 'moderator') {
+      setState('forbidden')
+      return
+    }
+    const controller = new AbortController()
+    apiRequest('/moderation/queue', { token, signal: controller.signal })
+      .then((data) => { setItems(data); setState('ready') })
+      .catch((requestError) => {
+        if (requestError.name !== 'AbortError') {
+          setError(requestError.status === 401 ? 'Войдите снова, чтобы продолжить.' : requestError.message)
+          setState('error')
+        }
+      })
+    return () => controller.abort()
+  }, [user, token])
+
+  async function openSubmission(id) {
+    setError('')
+    try {
+      setSelected(await apiRequest(`/moderation/queue/${id}`, { token }))
+    } catch (requestError) {
+      setError(requestError.message)
+      if (requestError.status === 404) {
+        setItems((current) => current.filter((item) => item.id !== id))
+        setSelected(null)
+      }
+    }
+  }
+
+  if (state === 'forbidden') {
+    return <PageFrame eyebrow="МОДЕРАЦИЯ" title="Доступ ограничен" description="Очередь доступна только пользователям с ролью модератора.">
+      <Link className="button button-primary" to="/login">Войти под аккаунтом модератора</Link>
+    </PageFrame>
+  }
+
+  return <PageFrame eyebrow="РАБОЧЕЕ МЕСТО МОДЕРАТОРА" title="Очередь объявлений" description="Объявления расположены от самых ранних заявок к новым.">
+    {state === 'loading' && <p className="queue-message" role="status">Загружаем очередь…</p>}
+    {state === 'error' && <div className="queue-message queue-message--error" role="alert">{error}</div>}
+    {state === 'ready' && <div className="moderation-layout">
+      <section className="queue-list" aria-label="Ожидают проверки">
+        <div className="queue-toolbar"><strong>{items.length}</strong><span>ожидают проверки</span></div>
+        {items.length === 0 ? <div className="queue-empty"><h2>Очередь пуста</h2><p>Новые объявления появятся здесь после отправки на проверку.</p></div> : items.map((item) => <article className={`queue-item${selected?.id === item.id ? ' queue-item--selected' : ''}`} key={item.id}>
+          <div className="queue-item-heading"><h2>{item.title}</h2><time dateTime={item.submitted_at}>{new Date(item.submitted_at).toLocaleString('ru-RU')}</time></div>
+          <p className="queue-meta">{item.author.display_name} · {item.category_name}</p>
+          <div className="queue-photos" aria-label={`Фотографий: ${item.photos.length}`}>
+            {item.photos.length ? item.photos.slice(0, 4).map((photo) => <ModerationPhoto compact key={photo.id} photo={photo} submissionId={item.id} token={token} />) : <span className="photo-chip photo-chip--empty">Без фотографий</span>}
+            {item.photos.length > 4 && <span className="photo-chip">+{item.photos.length - 4}</span>}
+          </div>
+          <button className="text-button queue-open" onClick={() => openSubmission(item.id)} type="button">Открыть карточку →</button>
+        </article>)}
+      </section>
+      <section className="submission-panel" aria-label="Карточка объявления" aria-live="polite">
+        {selected ? <>
+          <div className="submission-topline"><span>Версия {selected.version}</span><time dateTime={selected.submitted_at}>{new Date(selected.submitted_at).toLocaleString('ru-RU')}</time></div>
+          <h2>{selected.title}</h2>
+          <p className="submission-price">{new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(selected.price)}</p>
+          <p className="submission-category">{selected.category_name}</p>
+          <p className="submission-description">{selected.description}</p>
+          <div className="submission-author"><strong>{selected.author.display_name}</strong><a href={`mailto:${selected.author.email}`}>{selected.author.email}</a></div>
+          <h3>Фотографии ({selected.photos.length})</h3>
+          <div className="submission-photos">{selected.photos.length ? selected.photos.map((photo) => <ModerationPhoto key={photo.id} photo={photo} submissionId={selected.id} token={token} />) : <p className="queue-muted">Фотографии не приложены.</p>}</div>
+        </> : <div className="detail-placeholder"><span aria-hidden="true">↖</span><h2>Выберите объявление</h2><p>Полная карточка и фотографии появятся здесь.</p></div>}
+        {error && <p className="form-error" role="alert">{error}</p>}
+      </section>
+    </div>}
+  </PageFrame>
 }
 
 function CreateListingPage({ user }) {
@@ -384,10 +498,11 @@ export default function App() {
       <ApiStatus />
       <Routes>
         <Route element={<CatalogPage />} path="/" />
-        <Route element={<AuthPage mode="login" />} path="/login" />
-        <Route element={<AuthPage mode="register" />} path="/register" />
+        <Route element={<AuthPage mode="login" onAuthenticated={setUser} />} path="/login" />
+        <Route element={<AuthPage mode="register" onAuthenticated={setUser} />} path="/register" />
         <Route element={<CreateListingPage user={user} />} path="/listings/new" />
         <Route element={<MyListingsPage user={user} />} path="/my-listings" />
+        <Route element={<ModerationQueuePage user={user} />} path="/moderation" />
         <Route element={<NotFoundPage />} path="*" />
       </Routes>
       <footer className="site-footer">

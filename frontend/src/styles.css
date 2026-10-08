@@ -86,6 +86,8 @@ h1 { margin-bottom: 18px; font: 700 clamp(36px, 5vw, 58px)/1.08 Manrope, sans-se
 .field input::placeholder, .field textarea::placeholder { color: #a3a49c; }
 .form-submit { width: 100%; margin-top: 3px; }
 .form-note { margin: 15px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.form-error { margin: 14px 0 0; color: #a34436; font-size: 13px; line-height: 1.55; }
+.button:disabled { cursor: wait; opacity: .7; }
 .form-note a, .form-switch a { color: var(--green); font-weight: 700; text-decoration-thickness: 1px; text-underline-offset: 3px; }
 .form-switch { margin: 19px 0 0; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; text-align: center; }
 .form-error, .form-success, .form-status { display: flex; flex-direction: column; gap: 5px; margin-bottom: 19px; padding: 12px 14px; border-radius: 10px; font-size: 13px; line-height: 1.5; }
@@ -101,6 +103,47 @@ h1 { margin-bottom: 18px; font: 700 clamp(36px, 5vw, 58px)/1.08 Manrope, sans-se
 .listing-card h2 { margin-bottom: 6px; font: 700 16px Manrope, sans-serif; }
 .listing-card p { margin-bottom: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .status-pill { flex: 0 0 auto; padding: 7px 11px; border-radius: 999px; background: #f4efe2; color: #80591f; font-size: 11px; font-weight: 700; }
+
+.queue-message { padding: 20px 0; color: var(--muted); }
+.queue-message--error { color: #a34436; }
+.moderation-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, .88fr); align-items: start; gap: 22px; }
+.queue-list, .submission-panel { overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: var(--paper); }
+.queue-toolbar { display: flex; align-items: baseline; gap: 8px; padding: 17px 20px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+.queue-toolbar strong { color: var(--green-dark); font: 700 22px Manrope, sans-serif; }
+.queue-item { padding: 19px 20px 18px; border-bottom: 1px solid var(--line); }
+.queue-item:last-child { border-bottom: 0; }
+.queue-item--selected { background: #f4f6f0; box-shadow: inset 3px 0 var(--green); }
+.queue-item-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.queue-item-heading h2 { margin: 0; font: 700 16px Manrope, sans-serif; }
+.queue-item-heading time, .submission-topline time { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.queue-meta { margin: 8px 0 13px; color: #686b62; font-size: 12px; }
+.queue-photos { display: flex; flex-wrap: wrap; gap: 6px; }
+.photo-chip { max-width: 100%; overflow: hidden; padding: 5px 8px; border-radius: 8px; background: #edf1e9; color: #536653; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.photo-chip--empty { background: #f2f0e9; color: var(--muted); }
+.moderation-photo { min-width: 0; flex: 1 1 130px; margin: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 11px; background: #f7f6f1; }
+.moderation-photo img { display: block; width: 100%; height: 126px; object-fit: cover; }
+.moderation-photo figcaption { overflow: hidden; padding: 8px 10px; color: #686b62; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.moderation-photo--compact { width: 74px; flex: 0 0 74px; border-radius: 9px; }
+.moderation-photo--compact img, .moderation-photo--compact .moderation-photo-placeholder { height: 58px; }
+.moderation-photo-placeholder { display: grid; min-height: 126px; place-items: center; padding: 8px; color: var(--muted); font-size: 11px; text-align: center; }
+.queue-open { margin-top: 13px; color: var(--green-dark); font-size: 12px; }
+.queue-empty { padding: 45px 24px; text-align: center; }
+.queue-empty h2 { margin-bottom: 8px; font: 700 17px Manrope, sans-serif; }
+.queue-empty p, .queue-muted { margin-bottom: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.submission-panel { min-height: 370px; padding: 23px; }
+.submission-topline { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 17px; color: var(--green-dark); font-size: 11px; font-weight: 700; }
+.submission-panel h2 { margin: 0 0 8px; font: 700 23px/1.2 Manrope, sans-serif; letter-spacing: -.6px; }
+.submission-price { margin: 0 0 4px; color: var(--green-dark); font: 700 18px Manrope, sans-serif; }
+.submission-category { margin-bottom: 17px; color: var(--muted); font-size: 12px; }
+.submission-description { padding: 16px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: #55584f; font-size: 13px; line-height: 1.65; white-space: pre-wrap; }
+.submission-author { display: flex; flex-direction: column; gap: 4px; margin: 17px 0 23px; font-size: 13px; }
+.submission-author a { color: var(--green); font-size: 12px; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.submission-panel h3 { margin-bottom: 11px; font: 700 14px Manrope, sans-serif; }
+.submission-photos { display: flex; flex-wrap: wrap; gap: 8px; }
+.detail-placeholder { min-height: 322px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.detail-placeholder > span { display: grid; width: 43px; height: 43px; place-items: center; margin-bottom: 14px; border-radius: 14px; background: #edf1e9; color: var(--green); font-size: 21px; }
+.detail-placeholder h2 { margin-bottom: 7px; font-size: 17px; }
+.detail-placeholder p { max-width: 230px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 
 .site-footer { min-height: 70px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid #dedbd2; color: #85877e; font-size: 11px; }
 .api-address { overflow-wrap: anywhere; text-align: right; }
@@ -130,6 +173,10 @@ h1 { margin-bottom: 18px; font: 700 clamp(36px, 5vw, 58px)/1.08 Manrope, sans-se
   .empty-card { padding: 38px 20px; }
   .listing-card { align-items: flex-start; padding: 16px; }
   .status-pill { font-size: 10px; }
+  .moderation-layout { grid-template-columns: 1fr; }
+  .submission-panel { min-height: 300px; }
+  .queue-item { padding: 16px; }
+  .queue-item-heading { align-items: flex-start; flex-direction: column; gap: 5px; }
   .site-footer { min-height: 78px; flex-wrap: wrap; justify-content: space-between; gap: 7px 14px; padding: 14px 0; }
   .site-footer span:nth-child(2) { order: 3; width: 100%; }
   .api-address { max-width: 65%; }

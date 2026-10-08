@@ -1,6 +1,22 @@
 import { useEffect, useState } from 'react'
-import { Link, NavLink, Route, Routes } from 'react-router-dom'
-import { API_URL, apiRequest, checkApiHealth } from './api.js'
+import { Link, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
+import {
+  API_URL,
+  apiRequest,
+  checkApiHealth,
+  createListing,
+  loadCategories,
+  loadMyListings,
+  registerUser,
+  signIn,
+} from './api.js'
+
+const LISTING_STATUS_LABELS = {
+  draft: 'Черновик',
+  pending: 'На модерации',
+  published: 'Опубликовано',
+  rejected: 'Отклонено',
+}
 
 function readUser() {
   try {
@@ -116,41 +132,36 @@ function CatalogPage() {
 }
 
 function AuthPage({ mode, onAuthenticated }) {
+  const navigate = useNavigate()
   const isLogin = mode === 'login'
   const title = isLogin ? 'С возвращением' : 'Создаём аккаунт'
-  const description = isLogin ? 'Войдите, чтобы управлять своими объявлениями.' : 'Пара минут - и можно делиться находками с соседями.'
+  const description = isLogin ? 'Управление объявлениями доступно после входа.' : 'Пара минут - и можно делиться находками с соседями.'
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
-  async function submit(event) {
+  async function handleSubmit(event) {
     event.preventDefault()
     setError('')
     setSubmitting(true)
-    const form = new FormData(event.currentTarget)
-    const payload = {
-      email: form.get('email'),
-      password: form.get('password'),
-    }
+
+    const formData = new FormData(event.currentTarget)
+    const email = formData.get('email')
+    const password = formData.get('password')
+
     try {
-      if (!isLogin) {
-        await apiRequest('/auth/register', {
-          method: 'POST',
-          body: JSON.stringify({ ...payload, display_name: form.get('name') }),
+      let user
+      if (isLogin) {
+        user = await signIn(email, password)
+      } else {
+        user = await registerUser({
+          email,
+          displayName: formData.get('name'),
+          password,
         })
       }
-      const tokenData = await apiRequest('/auth/login', {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      })
-      const user = await apiRequest('/auth/me', { token: tokenData.access_token })
-      localStorage.setItem('marketplace-token', tokenData.access_token)
-      localStorage.setItem('marketplace-user', JSON.stringify({
-        id: user.id,
-        name: user.display_name,
-        email: user.email,
-        role: user.role,
-      }))
-      onAuthenticated({ id: user.id, name: user.display_name, email: user.email, role: user.role })
+
+      onAuthenticated(user)
+      navigate('/listings/new')
     } catch (requestError) {
       setError(requestError.message)
     } finally {
@@ -160,7 +171,8 @@ function AuthPage({ mode, onAuthenticated }) {
 
   return (
     <PageFrame eyebrow={isLogin ? 'ВХОД' : 'РЕГИСТРАЦИЯ'} title={title} description={description}>
-      <form className="form-card" onSubmit={submit}>
+      <form className="form-card" onSubmit={handleSubmit}>
+        {error && <div className="form-error" role="alert">{error}</div>}
         {!isLogin && (
           <label className="field">
             <span>Как к вам обращаться</span>
@@ -169,16 +181,15 @@ function AuthPage({ mode, onAuthenticated }) {
         )}
         <label className="field">
           <span>Электронная почта</span>
-          <input autoComplete="email" name="email" placeholder="name@example.com" required type="email" />
+            <input autoComplete="email" name="email" placeholder="name@example.com" required type="email" />
         </label>
         <label className="field">
           <span>Пароль</span>
           <input autoComplete={isLogin ? 'current-password' : 'new-password'} minLength={isLogin ? undefined : 12} name="password" placeholder="Не менее 12 символов" required type="password" />
         </label>
-        <button className="button button-primary form-submit" disabled={submitting} type="submit">{submitting ? 'Подождите…' : isLogin ? 'Войти' : 'Зарегистрироваться'}</button>
-        {error && <p className="form-error" role="alert">{error}</p>}
+        <button className="button button-primary form-submit" disabled={submitting} type="submit">{submitting ? 'Подождите' : isLogin ? 'Войти' : 'Зарегистрироваться'}</button>
         <p className="form-switch">
-          {isLogin ? 'Впервые здесь?' : 'Уже есть аккаунт?'}{' '}
+          {isLogin ? 'Первый раз?' : 'Уже есть аккаунт?'}{' '}
           <Link to={isLogin ? '/register' : '/login'}>{isLogin ? 'Создать аккаунт' : 'Войти'}</Link>
         </p>
       </form>
@@ -297,47 +308,162 @@ function ModerationQueuePage({ user }) {
 }
 
 function CreateListingPage({ user }) {
+  const [categories, setCategories] = useState([])
+  const [categoryState, setCategoryState] = useState('loading')
+  const [categoryError, setCategoryError] = useState('')
+  const [categoryAttempt, setCategoryAttempt] = useState(0)
+  const [formError, setFormError] = useState('')
+  const [createdListing, setCreatedListing] = useState(null)
+  const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    if (!user) {
+      setCategoryState('ready')
+      return undefined
+    }
+
+    const controller = new AbortController()
+    setCategoryState('loading')
+    loadCategories(controller.signal)
+      .then((items) => {
+        setCategories(items)
+        setCategoryState('ready')
+        setCategoryError('')
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') {
+          setCategoryState('error')
+          setCategoryError(error.message)
+        }
+      })
+
+    return () => controller.abort()
+  }, [user, categoryAttempt])
+
+  async function handleSubmit(event) {
+    event.preventDefault()
+    const form = event.currentTarget
+    setFormError('')
+    setCreatedListing(null)
+    setSubmitting(true)
+
+    const formData = new FormData(event.currentTarget)
+    const payload = {
+      title: formData.get('title').trim(),
+      description: formData.get('description').trim(),
+      price: formData.get('price'),
+      category_id: Number(formData.get('category_id')),
+    }
+
+    try {
+      const listing = await createListing(payload)
+      setCreatedListing(listing)
+      form.reset()
+    } catch (error) {
+      setFormError(error.message)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  if (!user) {
+    return (
+      <PageFrame eyebrow="НОВОЕ ОБЪЯВЛЕНИЕ" title="Создание объявления доступно после входа" description="Объявления сохраняются в личном кабинете.">
+        <Link className="button button-primary" to="/login">Войти</Link>
+      </PageFrame>
+    )
+  }
+
   return (
     <PageFrame eyebrow="НОВОЕ ОБЪЯВЛЕНИЕ" title="Дадим вещи вторую жизнь" description="Опишите вещь и подготовьте объявление к публикации.">
-      <form className="form-card listing-form" onSubmit={(event) => event.preventDefault()}>
+      <form className="form-card listing-form" onSubmit={handleSubmit}>
+        {categoryState === 'loading' && <div className="form-status" role="status">Загружаем категории</div>}
+        {categoryState === 'error' && <div className="form-error" role="alert">Не удалось загрузить категории: {categoryError}</div>}
+        {categoryState === 'error' && <button className="text-button category-retry" onClick={() => setCategoryAttempt((value) => value + 1)} type="button">Загрузить категории ещё раз</button>}
+        {categoryState === 'ready' && categories.length === 0 && <div className="form-error" role="alert">Активные категории пока не найдены. Сохранение объявления временно недоступно.</div>}
+        {formError && <div className="form-error" role="alert">{formError}</div>}
+        {createdListing && (
+          <div className="form-success" role="status">
+            <strong>Черновик сохранён</strong>
+            <span>Статус: {createdListing.status === 'pending' ? 'на модерации' : 'черновик'}</span>
+          </div>
+        )}
         <label className="field">
           <span>Название</span>
-          <input name="title" placeholder="Например, городской велосипед" required />
+          <input maxLength={200} name="title" placeholder="Например, городской велосипед" required />
         </label>
         <label className="field">
           <span>Категория</span>
-          <select defaultValue="" name="category" required>
-          <option disabled value="">Укажите категорию</option>
-            <option>Дом и быт</option>
-            <option>Одежда</option>
-            <option>Электроника</option>
-            <option>Хобби и спорт</option>
+          <select defaultValue="" name="category_id" required>
+            <option disabled value="">Категория не выбрана</option>
+            {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
           </select>
         </label>
         <label className="field">
           <span>Описание</span>
-          <textarea name="description" placeholder="Состояние, особенности и где забрать" rows="4" required />
+          <textarea maxLength={5000} name="description" placeholder="Состояние, особенности и где забрать" rows="4" required />
         </label>
         <label className="field">
           <span>Цена, ₽</span>
-          <input min="0" name="price" placeholder="0" type="number" />
+          <input min="0" name="price" placeholder="0" required step="0.01" type="number" />
         </label>
-        <button className="button button-primary form-submit" type="submit">Сохранить черновик</button>
-        <p className="form-note">{user ? 'Объявление сохранится в профиле после подключения API.' : <>Для управления объявлением <Link to="/login">войдите</Link> или <Link to="/register">создайте аккаунт</Link>.</>}</p>
+        <button className="button button-primary form-submit" disabled={categoryState !== 'ready' || categories.length === 0 || submitting} type="submit">{submitting ? 'Сохраняем' : 'Сохранить черновик'}</button>
+        <button className="button button-secondary form-submit" disabled title="Подача станет доступна после подключения проверок и загрузки фотографий." type="button">Подать на модерацию</button>
+        <p className="form-note">Подача станет доступна после подключения правил проверки и фотографий.</p>
       </form>
     </PageFrame>
   )
 }
 
 function MyListingsPage({ user }) {
+  const [listings, setListings] = useState([])
+  const [state, setState] = useState('loading')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!user) {
+      setState('ready')
+      return undefined
+    }
+
+    const controller = new AbortController()
+    loadMyListings(controller.signal)
+      .then((items) => {
+        setListings(items)
+        setState('ready')
+      })
+      .catch((requestError) => {
+        if (requestError.name !== 'AbortError') {
+          setError(requestError.message)
+          setState('error')
+        }
+      })
+
+    return () => controller.abort()
+  }, [user])
+
   return (
     <PageFrame eyebrow="ЛИЧНЫЙ КАБИНЕТ" title="Мои объявления" description="Здесь будут храниться черновики и опубликованные объявления.">
-      <section className="empty-card">
-        <span className="empty-icon" aria-hidden="true">＋</span>
-        <h2>{user ? 'Пока нет объявлений' : 'Войдите, чтобы увидеть объявления'}</h2>
-        <p>{user ? 'Начнём с первой вещи: объявление подготовится за пару минут.' : 'После входа появятся черновики и публикации.'}</p>
-        <Link className="button button-primary" to={user ? '/listings/new' : '/login'}>{user ? 'Создать объявление' : 'Войти'}</Link>
-      </section>
+      {error && <div className="form-error" role="alert">{error}</div>}
+      {state === 'loading' && user && <div className="form-status" role="status">Загружаем объявления</div>}
+      {state === 'ready' && listings.length > 0 && (
+        <section aria-label="Список объявлений" className="listing-list">
+          {listings.map((listing) => (
+            <article className="listing-card" key={listing.id}>
+              <div><h2>{listing.title}</h2><p>{listing.description}</p></div>
+            <span className="status-pill">{LISTING_STATUS_LABELS[listing.status] || listing.status}</span>
+            </article>
+          ))}
+        </section>
+      )}
+      {(state === 'ready' && listings.length === 0) || !user ? (
+        <section className="empty-card">
+          <span className="empty-icon" aria-hidden="true">＋</span>
+          <h2>{user ? 'Пока нет объявлений' : 'Для просмотра нужен вход'}</h2>
+          <p>{user ? 'Начнём с первой вещи: объявление подготовится за пару минут.' : 'После входа появятся черновики и публикации.'}</p>
+          <Link className="button button-primary" to={user ? '/listings/new' : '/login'}>{user ? 'Создать объявление' : 'Войти'}</Link>
+        </section>
+      ) : null}
     </PageFrame>
   )
 }
@@ -359,7 +485,11 @@ export default function App() {
     }
 
     window.addEventListener('storage', syncUser)
-    return () => window.removeEventListener('storage', syncUser)
+    window.addEventListener('marketplace:user-change', syncUser)
+    return () => {
+      window.removeEventListener('storage', syncUser)
+      window.removeEventListener('marketplace:user-change', syncUser)
+    }
   }, [])
 
   return (

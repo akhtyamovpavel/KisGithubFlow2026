@@ -236,7 +236,7 @@ def test_author_moderation_resubmission_and_publication(marketplace_client):
     assert first["decision"]["status"] == "rejected"
     assert first["decision"]["reason"] == "Укажите состояние корпуса и комплектность."
     assert first["photos"][0]["content_type"] == "image/png"
-    assert "состояние" in second["description"]
+    assert "хорошем состоянии" in second["description"]
     assert second["decision"]["status"] == "approved"
     assert second["decision"]["moderator_id"] == session.query(User).filter_by(
         email="moderator@example.com"

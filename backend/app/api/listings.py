@@ -8,6 +8,12 @@ from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import CurrentUser, DatabaseSession
 from app.models import Category, Listing, ListingStatus, UserRole
+from app.services.history import (
+    ListingSubmissionValidationError,
+    PhotoSnapshot,
+    create_submission,
+)
+from app.services.listing_validation import RULES, rule_results, validate_listing
 
 router = APIRouter(prefix="/listings", tags=["listings"])
 
@@ -55,6 +61,54 @@ class ListingResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     photos: list[ListingPhotoResponse]
+
+
+class ListingViolationResponse(BaseModel):
+    rule_id: str
+    field: str
+    message: str
+
+
+class ListingRuleResultResponse(BaseModel):
+    id: str
+    field: str
+    label: str
+    passed: bool
+
+
+class ListingRuleResponse(BaseModel):
+    id: str
+    field: str
+    label: str
+
+
+class ListingValidationResponse(BaseModel):
+    valid: bool
+    rules: list[ListingRuleResultResponse]
+    violations: list[ListingViolationResponse]
+
+
+def get_owned_listing_for_validation(
+    listing_id: int,
+    session: DatabaseSession,
+    author: CurrentUser,
+) -> Listing:
+    listing = session.scalar(
+        select(Listing)
+        .options(selectinload(Listing.category), selectinload(Listing.photos))
+        .where(Listing.id == listing_id)
+    )
+    if listing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Listing not found",
+        )
+    if listing.author_id != author.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the listing author can submit this listing",
+        )
+    return listing
 
 
 class PublicListingResponse(BaseModel):
@@ -186,6 +240,14 @@ def list_my_listings(
     return [listing_response(listing) for listing in listings]
 
 
+@router.get("/submission-rules", response_model=list[ListingRuleResponse])
+def listing_submission_rules() -> list[ListingRuleResponse]:
+    return [
+        ListingRuleResponse(id=rule.id, field=rule.field, label=rule.label)
+        for rule in RULES
+    ]
+
+
 @router.get("/{listing_id}", response_model=ListingResponse)
 def get_listing(
     listing_id: int,
@@ -222,6 +284,57 @@ def update_draft_listing(
     session.commit()
     session.refresh(listing)
     return listing_response(listing)
+
+
+@router.get("/{listing_id}/validation", response_model=ListingValidationResponse)
+def validate_listing_for_author(
+    listing_id: int,
+    session: DatabaseSession,
+    author: CurrentUser,
+) -> ListingValidationResponse:
+    listing = get_owned_listing_for_validation(listing_id, session, author)
+    violations = validate_listing(listing)
+    rules = rule_results(listing)
+    return ListingValidationResponse(
+        valid=not violations,
+        rules=rules,
+        violations=violations,
+    )
+
+
+@router.post("/{listing_id}/submit", response_model=ListingResponse)
+def submit_listing(
+    listing_id: int,
+    session: DatabaseSession,
+    author: CurrentUser,
+) -> Listing:
+    listing = get_owned_listing_for_validation(listing_id, session, author)
+    if listing.status not in {ListingStatus.DRAFT, ListingStatus.REJECTED}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only drafts and rejected listings can be submitted",
+        )
+
+    photo_snapshots = [
+        PhotoSnapshot(
+            storage_key=photo.storage_key,
+            original_filename=photo.storage_key.rsplit("/", 1)[-1],
+            content_type=photo.content_type,
+        )
+        for photo in listing.photos
+    ]
+    try:
+        create_submission(session, listing, photo_snapshots)
+        session.commit()
+    except ListingSubmissionValidationError as error:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"violations": error.violations},
+        ) from error
+
+    session.refresh(listing)
+    return listing
 
 
 @router.get("", response_model=list[PublicListingResponse])

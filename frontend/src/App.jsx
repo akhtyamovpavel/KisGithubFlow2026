@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, NavLink, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import {
   API_URL,
@@ -10,12 +10,15 @@ import {
   loadListingPhoto,
   loadCategories,
   loadMyListings,
+  loadSubmissionRules,
   loadPublicListings,
   registerUser,
   replaceListingPhoto,
   signIn,
+  submitListing,
   updateListing,
   uploadListingPhoto,
+  validateListing,
 } from './api.js'
 
 const LISTING_STATUS_LABELS = {
@@ -293,6 +296,7 @@ function ModerationPhoto({ submissionId, photo, token, compact = false }) {
 function ModerationQueuePage({ user }) {
   const [items, setItems] = useState([])
   const [selected, setSelected] = useState(null)
+  const [checkedRules, setCheckedRules] = useState([])
   const [state, setState] = useState('loading')
   const [error, setError] = useState('')
   const token = localStorage.getItem('marketplace-token')
@@ -317,7 +321,9 @@ function ModerationQueuePage({ user }) {
   async function openSubmission(id) {
     setError('')
     try {
-      setSelected(await apiRequest(`/moderation/queue/${id}`, { token }))
+      const submission = await apiRequest(`/moderation/queue/${id}`, { token })
+      setSelected(submission)
+      setCheckedRules([])
     } catch (requestError) {
       setError(requestError.message)
       if (requestError.status === 404) {
@@ -359,6 +365,30 @@ function ModerationQueuePage({ user }) {
           <div className="submission-author"><strong>{selected.author.display_name}</strong><a href={`mailto:${selected.author.email}`}>{selected.author.email}</a></div>
           <h3>Фотографии ({selected.photos.length})</h3>
           <div className="submission-photos">{selected.photos.length ? selected.photos.map((photo) => <ModerationPhoto key={photo.id} photo={photo} submissionId={selected.id} token={token} />) : <p className="queue-muted">Фотографии не приложены.</p>}</div>
+          <section className="moderation-checklist" aria-label="Проверка правил подачи">
+            <h3>Проверка правил</h3>
+            <p>Отметьте пункты, которые проверили перед решением.</p>
+            <ul>{selected.rules.map((rule) => <li key={rule.id}>
+              <label>
+                <input
+                  checked={checkedRules.includes(rule.id)}
+                  onChange={(event) => setCheckedRules((current) => event.target.checked
+                    ? [...current, rule.id]
+                    : current.filter((ruleId) => ruleId !== rule.id))}
+                  type="checkbox"
+                />
+                <span>{rule.label}</span>
+                <small className={rule.passed ? 'rule-state rule-state--passed' : 'rule-state rule-state--failed'}>
+                  {rule.passed ? 'Автопроверка пройдена' : 'Есть нарушение'}
+                </small>
+              </label>
+            </li>)}</ul>
+            <p className="checklist-progress" role="status">
+              {checkedRules.length === selected.rules.length
+                ? 'Все правила отмечены как проверенные.'
+                : `Проверено ${checkedRules.length} из ${selected.rules.length}`}
+            </p>
+          </section>
         </> : <div className="detail-placeholder"><span aria-hidden="true">↖</span><h2>Выберите объявление</h2><p>Полная карточка и фотографии появятся здесь.</p></div>}
         {error && <p className="form-error" role="alert">{error}</p>}
       </section>
@@ -469,6 +499,7 @@ function CreateListingPage({ user }) {
   const navigate = useNavigate()
   const editing = Boolean(listingId)
   const [categories, setCategories] = useState([])
+  const [submissionRules, setSubmissionRules] = useState([])
   const [categoryState, setCategoryState] = useState('loading')
   const [categoryError, setCategoryError] = useState('')
   const [categoryAttempt, setCategoryAttempt] = useState(0)
@@ -476,7 +507,11 @@ function CreateListingPage({ user }) {
   const [draft, setDraft] = useState(null)
   const [draftState, setDraftState] = useState(editing ? 'loading' : 'ready')
   const [photos, setPhotos] = useState([])
+  const [createdListing, setCreatedListing] = useState(null)
+  const [attachedPhotoCount, setAttachedPhotoCount] = useState(0)
+  const [validationResult, setValidationResult] = useState(null)
   const [submitting, setSubmitting] = useState(false)
+  const formRef = useRef(null)
 
   useEffect(() => {
     if (!user) {
@@ -486,9 +521,13 @@ function CreateListingPage({ user }) {
 
     const controller = new AbortController()
     setCategoryState('loading')
-    loadCategories(controller.signal)
-      .then((items) => {
+    Promise.all([
+      loadCategories(controller.signal),
+      loadSubmissionRules(controller.signal),
+    ])
+      .then(([items, rules]) => {
         setCategories(items)
+        setSubmissionRules(rules)
         setCategoryState('ready')
         setCategoryError('')
       })
@@ -515,7 +554,12 @@ function CreateListingPage({ user }) {
       .then((listing) => {
         setDraft(listing)
         setPhotos(listing.photos || [])
+        setCreatedListing(listing)
+        setAttachedPhotoCount((listing.photos || []).length)
         setDraftState('ready')
+        if (['draft', 'rejected'].includes(listing.status)) {
+          validateListing(listing.id).then(setValidationResult).catch(() => {})
+        }
       })
       .catch((error) => {
         if (error.name !== 'AbortError') {
@@ -528,11 +572,16 @@ function CreateListingPage({ user }) {
 
   async function handleSubmit(event) {
     event.preventDefault()
-    const form = event.currentTarget
     setFormError('')
     setSubmitting(true)
 
     const formData = new FormData(event.currentTarget)
+    const imageFiles = formData.getAll('photos').filter((file) => file instanceof File && file.name)
+    if (imageFiles.length > 5) {
+      setFormError('Можно прикрепить не более пяти фотографий.')
+      setSubmitting(false)
+      return
+    }
     const payload = {
       title: formData.get('title').trim(),
       description: formData.get('description').trim(),
@@ -540,17 +589,74 @@ function CreateListingPage({ user }) {
       category_id: Number(formData.get('category_id')),
     }
 
+    let savedListing = null
     try {
       if (editing) {
         const listing = await updateListing(listingId, payload)
+        savedListing = listing
         setDraft(listing)
+        setCreatedListing(listing)
         setPhotos(listing.photos || [])
+        setValidationResult(await validateListing(listing.id))
       } else {
         const listing = await createListing(payload)
+        savedListing = listing
+        setDraft(listing)
+        setCreatedListing(listing)
+        let uploadedCount = 0
+        for (const file of imageFiles) {
+          await uploadListingPhoto(listing.id, file)
+          uploadedCount += 1
+          setAttachedPhotoCount(uploadedCount)
+        }
+        setValidationResult(await validateListing(listing.id))
         navigate(`/listings/${listing.id}/edit`, { replace: true })
       }
     } catch (error) {
       setFormError(error.message)
+      if (!editing && savedListing) {
+        navigate(`/listings/${savedListing.id}/edit`, { replace: true })
+      }
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleSubmitToModeration() {
+    if (!createdListing) return
+    setSubmitting(true)
+    setFormError('')
+    try {
+      let listing = createdListing
+      if (editing && formRef.current) {
+        const formData = new FormData(formRef.current)
+        listing = await updateListing(listing.id, {
+          title: formData.get('title').trim(),
+          description: formData.get('description').trim(),
+          price: formData.get('price'),
+          category_id: Number(formData.get('category_id')),
+        })
+        setDraft(listing)
+        setCreatedListing(listing)
+      }
+      const result = await validateListing(listing.id)
+      setValidationResult(result)
+      if (!result.valid) {
+        setFormError('Перед подачей исправьте нарушения в списке ниже.')
+        return
+      }
+      const submitted = await submitListing(listing.id)
+      setCreatedListing(submitted)
+      setDraft(submitted)
+      navigate('/my-listings')
+    } catch (requestError) {
+      const violations = requestError.data?.detail?.violations
+      if (violations) {
+        setValidationResult({ valid: false, violations, rules: submissionRules })
+        setFormError('Перед подачей исправьте нарушения в списке ниже.')
+      } else {
+        setFormError(requestError.message)
+      }
     } finally {
       setSubmitting(false)
     }
@@ -571,17 +677,28 @@ function CreateListingPage({ user }) {
     return <PageFrame eyebrow="ЧЕРНОВИК" title="Не удалось открыть объявление"><div className="form-error" role="alert">{formError}</div><Link className="button button-secondary" to="/my-listings">К моим объявлениям</Link></PageFrame>
   }
   if (editing && draft && !['draft', 'rejected'].includes(draft.status)) {
-    return <PageFrame eyebrow="ЧЕРНОВИК" title="Это объявление нельзя редактировать" description="Редактирование доступно для черновиков и объявлений, возвращённых с модерации."><Link className="button button-secondary" to="/my-listings">К моим объявлениям</Link></PageFrame>
+    return <PageFrame eyebrow="ОБЪЯВЛЕНИЕ" title="Редактирование недоступно" description={`Статус: ${LISTING_STATUS_LABELS[draft.status] || draft.status}. Последнее изменение: ${formatDate(draft.updated_at)}.`}><Link className="button button-secondary" to="/my-listings">К моим объявлениям</Link></PageFrame>
   }
 
   return (
     <PageFrame eyebrow={editing ? 'РЕДАКТИРОВАНИЕ ЧЕРНОВИКА' : 'НОВОЕ ОБЪЯВЛЕНИЕ'} title={editing ? 'Продолжим подготовку' : 'Дадим вещи вторую жизнь'} description={editing ? 'Изменения сохраняются как черновик и не отправляют объявление на модерацию.' : 'Опишите вещь и сохраните объявление как черновик.'}>
-      <form className="form-card listing-form" onSubmit={handleSubmit}>
+      <form className="form-card listing-form" onSubmit={handleSubmit} ref={formRef}>
         {categoryState === 'loading' && <div className="form-status" role="status">Загружаем категории</div>}
         {categoryState === 'error' && <div className="form-error" role="alert">Не удалось загрузить категории: {categoryError}</div>}
         {categoryState === 'error' && <button className="text-button category-retry" onClick={() => setCategoryAttempt((value) => value + 1)} type="button">Загрузить категории ещё раз</button>}
         {categoryState === 'ready' && categories.length === 0 && <div className="form-error" role="alert">Активные категории пока не найдены. Сохранение объявления временно недоступно.</div>}
         {formError && <div className="form-error" role="alert">{formError}</div>}
+        {createdListing && (
+          <div className="form-success" role="status">
+            <strong>{createdListing.status === 'pending' ? 'Объявление отправлено' : 'Черновик сохранён'}</strong>
+            <span>Статус: {LISTING_STATUS_LABELS[createdListing.status] || createdListing.status}</span>
+            <span>Фотографий: {attachedPhotoCount}</span>
+          </div>
+        )}
+        {submissionRules.length > 0 && <section className="submission-rules" aria-label="Правила перед подачей">
+          <h2>Проверьте перед подачей</h2>
+          <ul>{submissionRules.map((rule) => <li key={rule.id}>{rule.label}</li>)}</ul>
+        </section>}
         {editing && draft && <div className="form-status" role="status">Статус: {LISTING_STATUS_LABELS[draft.status] || draft.status}. Изменено: {formatDate(draft.updated_at)}</div>}
         <label className="field">
           <span>Название</span>
@@ -602,10 +719,26 @@ function CreateListingPage({ user }) {
           <span>Цена, ₽</span>
           <input defaultValue={draft?.price || ''} min="0" name="price" placeholder="0" required step="0.01" type="number" />
         </label>
-        {editing && draft && <DraftPhotoManager listingId={draft.id} onChange={async (nextPhotos) => { setPhotos(nextPhotos); setDraft(await loadListing(draft.id)) }} photos={photos} />}
+        {editing && draft && <DraftPhotoManager listingId={draft.id} onChange={async (nextPhotos) => {
+          setPhotos(nextPhotos)
+          const updated = await loadListing(draft.id)
+          setDraft(updated)
+          setCreatedListing(updated)
+          setAttachedPhotoCount((updated.photos || []).length)
+          setValidationResult(await validateListing(updated.id))
+        }} photos={photos} />}
+        {!editing && <label className="field">
+          <span>Фотографии</span>
+          <input accept="image/jpeg,image/png,image/webp" multiple name="photos" type="file" />
+          <small>От одной до пяти фотографий. Размер каждого файла до 5 МБ.</small>
+        </label>}
         <button className="button button-primary form-submit" disabled={categoryState !== 'ready' || categories.length === 0 || submitting} type="submit">{submitting ? 'Сохраняем' : editing ? 'Сохранить изменения' : 'Сохранить черновик'}</button>
-        <button className="button button-secondary form-submit" disabled title="Подача станет доступна после подключения проверок и загрузки фотографий." type="button">Подать на модерацию</button>
-        <p className="form-note">Черновик можно открыть и изменить в разделе «Мои объявления».</p>
+        <button className="button button-secondary form-submit" disabled={!createdListing || submitting} onClick={handleSubmitToModeration} type="button">{submitting ? 'Проверяем' : 'Подать на модерацию'}</button>
+        {validationResult && !validationResult.valid && <div className="validation-results" role="alert">
+          <strong>Найдены нарушения</strong>
+          <ul>{validationResult.violations.map((violation) => <li key={`${violation.rule_id}-${violation.field}`}><b>{violation.field}:</b> {violation.message}</li>)}</ul>
+        </div>}
+        <p className="form-note">Сохранение оставляет объявление черновиком. Подача запускает обязательные проверки.</p>
       </form>
     </PageFrame>
   )

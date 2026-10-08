@@ -27,6 +27,7 @@ export async function apiRequest(path, { token = localStorage.getItem(TOKEN_KEY)
   if (!response.ok) {
     const error = new Error(getErrorMessage(data?.detail, `Ошибка сервера (${response.status}).`))
     error.status = response.status
+    error.data = data
     throw error
   }
   return data
@@ -82,6 +83,10 @@ export function loadCategories(signal) {
   return request('/categories', { signal })
 }
 
+export function loadSubmissionRules(signal) {
+  return request('/listings/submission-rules', { signal, token: null })
+}
+
 export function createListing(payload) {
   return request('/listings', {
     method: 'POST',
@@ -98,6 +103,14 @@ export function updateListing(listingId, payload) {
     method: 'PUT',
     body: JSON.stringify(payload),
   })
+}
+
+export function validateListing(listingId) {
+  return request(`/listings/${listingId}/validation`)
+}
+
+export function submitListing(listingId) {
+  return request(`/listings/${listingId}/submit`, { method: 'POST' })
 }
 
 export function loadMyListings(signal) {

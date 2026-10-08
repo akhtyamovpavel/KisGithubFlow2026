@@ -168,7 +168,7 @@ def test_author_moderation_resubmission_and_publication(marketplace_client):
         json={
             "title": "Плёночный фотоаппарат",
             "description": (
-                "Рабочий фотоаппарат: корпус без повреждений, в комплекте "
+                "Рабочий фотоаппарат: корпус в хорошем состоянии, в комплекте "
                 "ремень и крышка объектива."
             ),
             "price": "1250.00",

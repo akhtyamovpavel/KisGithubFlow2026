@@ -12,7 +12,6 @@ import {
   loadListingPhoto,
   loadCategories,
   loadMyListings,
-  loadListingHistory,
   loadPublicListing,
   loadSubmissionRules,
   loadPublicListings,

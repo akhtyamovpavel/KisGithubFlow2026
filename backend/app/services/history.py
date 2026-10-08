@@ -15,6 +15,7 @@ from app.models import (
     UserRole,
     utc_now,
 )
+from app.services.listing_validation import validate_listing
 
 
 @dataclass(frozen=True)
@@ -24,12 +25,22 @@ class PhotoSnapshot:
     content_type: str
 
 
+class ListingSubmissionValidationError(ValueError):
+    def __init__(self, violations: list[dict[str, str]]) -> None:
+        super().__init__("Listing does not satisfy submission rules")
+        self.violations = violations
+
+
 def create_submission(
     session: Session,
     listing: Listing,
     photos: list[PhotoSnapshot],
     submitted_at: datetime | None = None,
 ) -> ListingSubmission:
+    violations = validate_listing(listing, photos)
+    if violations:
+        raise ListingSubmissionValidationError(violations)
+
     if listing.status not in {ListingStatus.DRAFT, ListingStatus.REJECTED}:
         raise ValueError("Only drafts and rejected listings can be submitted")
 

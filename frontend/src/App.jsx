@@ -7,8 +7,12 @@ import {
   createListing,
   loadCategories,
   loadMyListings,
+  loadSubmissionRules,
   registerUser,
   signIn,
+  submitListing,
+  uploadListingPhoto,
+  validateListing,
 } from './api.js'
 
 const LISTING_STATUS_LABELS = {
@@ -234,6 +238,7 @@ function ModerationPhoto({ submissionId, photo, token, compact = false }) {
 function ModerationQueuePage({ user }) {
   const [items, setItems] = useState([])
   const [selected, setSelected] = useState(null)
+  const [checkedRules, setCheckedRules] = useState([])
   const [state, setState] = useState('loading')
   const [error, setError] = useState('')
   const token = localStorage.getItem('marketplace-token')
@@ -258,7 +263,9 @@ function ModerationQueuePage({ user }) {
   async function openSubmission(id) {
     setError('')
     try {
-      setSelected(await apiRequest(`/moderation/queue/${id}`, { token }))
+      const submission = await apiRequest(`/moderation/queue/${id}`, { token })
+      setSelected(submission)
+      setCheckedRules([])
     } catch (requestError) {
       setError(requestError.message)
       if (requestError.status === 404) {
@@ -300,6 +307,30 @@ function ModerationQueuePage({ user }) {
           <div className="submission-author"><strong>{selected.author.display_name}</strong><a href={`mailto:${selected.author.email}`}>{selected.author.email}</a></div>
           <h3>Фотографии ({selected.photos.length})</h3>
           <div className="submission-photos">{selected.photos.length ? selected.photos.map((photo) => <ModerationPhoto key={photo.id} photo={photo} submissionId={selected.id} token={token} />) : <p className="queue-muted">Фотографии не приложены.</p>}</div>
+          <section className="moderation-checklist" aria-label="Проверка правил подачи">
+            <h3>Проверка правил</h3>
+            <p>Отметьте пункты, которые проверили перед решением.</p>
+            <ul>{selected.rules.map((rule) => <li key={rule.id}>
+              <label>
+                <input
+                  checked={checkedRules.includes(rule.id)}
+                  onChange={(event) => setCheckedRules((current) => event.target.checked
+                    ? [...current, rule.id]
+                    : current.filter((ruleId) => ruleId !== rule.id))}
+                  type="checkbox"
+                />
+                <span>{rule.label}</span>
+                <small className={rule.passed ? 'rule-state rule-state--passed' : 'rule-state rule-state--failed'}>
+                  {rule.passed ? 'Автопроверка пройдена' : 'Есть нарушение'}
+                </small>
+              </label>
+            </li>)}</ul>
+            <p className="checklist-progress" role="status">
+              {checkedRules.length === selected.rules.length
+                ? 'Все правила отмечены как проверенные.'
+                : `Проверено ${checkedRules.length} из ${selected.rules.length}`}
+            </p>
+          </section>
         </> : <div className="detail-placeholder"><span aria-hidden="true">↖</span><h2>Выберите объявление</h2><p>Полная карточка и фотографии появятся здесь.</p></div>}
         {error && <p className="form-error" role="alert">{error}</p>}
       </section>
@@ -309,11 +340,14 @@ function ModerationQueuePage({ user }) {
 
 function CreateListingPage({ user }) {
   const [categories, setCategories] = useState([])
+  const [submissionRules, setSubmissionRules] = useState([])
   const [categoryState, setCategoryState] = useState('loading')
   const [categoryError, setCategoryError] = useState('')
   const [categoryAttempt, setCategoryAttempt] = useState(0)
   const [formError, setFormError] = useState('')
   const [createdListing, setCreatedListing] = useState(null)
+  const [attachedPhotoCount, setAttachedPhotoCount] = useState(0)
+  const [validationResult, setValidationResult] = useState(null)
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
@@ -324,9 +358,13 @@ function CreateListingPage({ user }) {
 
     const controller = new AbortController()
     setCategoryState('loading')
-    loadCategories(controller.signal)
-      .then((items) => {
+    Promise.all([
+      loadCategories(controller.signal),
+      loadSubmissionRules(controller.signal),
+    ])
+      .then(([items, rules]) => {
         setCategories(items)
+        setSubmissionRules(rules)
         setCategoryState('ready')
         setCategoryError('')
       })
@@ -348,6 +386,12 @@ function CreateListingPage({ user }) {
     setSubmitting(true)
 
     const formData = new FormData(event.currentTarget)
+    const imageFiles = formData.getAll('photos').filter((file) => file instanceof File && file.name)
+    if (imageFiles.length > 5) {
+      setFormError('Можно прикрепить не более пяти фотографий.')
+      setSubmitting(false)
+      return
+    }
     const payload = {
       title: formData.get('title').trim(),
       description: formData.get('description').trim(),
@@ -358,9 +402,40 @@ function CreateListingPage({ user }) {
     try {
       const listing = await createListing(payload)
       setCreatedListing(listing)
-      form.reset()
+      let uploadedCount = 0
+      for (const file of imageFiles) {
+        await uploadListingPhoto(listing.id, file)
+        uploadedCount += 1
+        setAttachedPhotoCount(uploadedCount)
+      }
+      setValidationResult(await validateListing(listing.id))
     } catch (error) {
       setFormError(error.message)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleSubmitToModeration() {
+    if (!createdListing) return
+    setSubmitting(true)
+    setFormError('')
+    try {
+      const result = await validateListing(createdListing.id)
+      setValidationResult(result)
+      if (!result.valid) {
+        setFormError('Перед подачей исправьте нарушения в списке ниже.')
+        return
+      }
+      setCreatedListing(await submitListing(createdListing.id))
+    } catch (requestError) {
+      const violations = requestError.data?.detail?.violations
+      if (violations) {
+        setValidationResult({ valid: false, violations, rules: submissionRules })
+        setFormError('Перед подачей исправьте нарушения в списке ниже.')
+      } else {
+        setFormError(requestError.message)
+      }
     } finally {
       setSubmitting(false)
     }
@@ -384,32 +459,45 @@ function CreateListingPage({ user }) {
         {formError && <div className="form-error" role="alert">{formError}</div>}
         {createdListing && (
           <div className="form-success" role="status">
-            <strong>Черновик сохранён</strong>
+            <strong>{createdListing.status === 'pending' ? 'Объявление отправлено' : 'Черновик сохранён'}</strong>
             <span>Статус: {createdListing.status === 'pending' ? 'на модерации' : 'черновик'}</span>
+            <span>Фотографий загружено: {attachedPhotoCount}</span>
           </div>
         )}
+        {submissionRules.length > 0 && <section className="submission-rules" aria-label="Правила перед подачей">
+          <h2>Проверьте перед подачей</h2>
+          <ul>{submissionRules.map((rule) => <li key={rule.id}>{rule.label}</li>)}</ul>
+        </section>}
         <label className="field">
           <span>Название</span>
-          <input maxLength={200} name="title" placeholder="Например, городской велосипед" required />
+          <input disabled={Boolean(createdListing)} maxLength={200} name="title" placeholder="Например, городской велосипед" required />
         </label>
         <label className="field">
           <span>Категория</span>
-          <select defaultValue="" name="category_id" required>
+          <select defaultValue="" disabled={Boolean(createdListing)} name="category_id" required>
             <option disabled value="">Категория не выбрана</option>
             {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
           </select>
         </label>
         <label className="field">
           <span>Описание</span>
-          <textarea maxLength={5000} name="description" placeholder="Состояние, особенности и где забрать" rows="4" required />
+          <textarea disabled={Boolean(createdListing)} maxLength={5000} name="description" placeholder="Состояние, особенности и где забрать" rows="4" required />
         </label>
         <label className="field">
           <span>Цена, ₽</span>
-          <input min="0" name="price" placeholder="0" required step="0.01" type="number" />
+          <input disabled={Boolean(createdListing)} min="0" name="price" placeholder="0" required step="0.01" type="number" />
         </label>
-        <button className="button button-primary form-submit" disabled={categoryState !== 'ready' || categories.length === 0 || submitting} type="submit">{submitting ? 'Сохраняем' : 'Сохранить черновик'}</button>
-        <button className="button button-secondary form-submit" disabled title="Подача станет доступна после подключения проверок и загрузки фотографий." type="button">Подать на модерацию</button>
-        <p className="form-note">Подача станет доступна после подключения правил проверки и фотографий.</p>
+        <label className="field">
+          <span>Фотографии</span>
+          <input accept="image/*" disabled={Boolean(createdListing)} multiple name="photos" type="file" />
+          <small>От одной до пяти фотографий. Размер каждого файла до 5 МБ.</small>
+        </label>
+        <button className="button button-primary form-submit" disabled={categoryState !== 'ready' || categories.length === 0 || submitting || Boolean(createdListing)} type="submit">{submitting ? 'Сохраняем' : 'Сохранить черновик'}</button>
+        <button className="button button-secondary form-submit" disabled={!createdListing || createdListing.status === 'pending' || submitting} onClick={handleSubmitToModeration} type="button">{submitting ? 'Проверяем' : createdListing?.status === 'pending' ? 'Уже подано' : 'Подать на модерацию'}</button>
+        {validationResult && !validationResult.valid && <div className="validation-results" role="alert">
+          <strong>Найдены нарушения</strong>
+          <ul>{validationResult.violations.map((violation) => <li key={`${violation.rule_id}-${violation.field}`}><b>{violation.field}:</b> {violation.message}</li>)}</ul>
+        </div>}
       </form>
     </PageFrame>
   )

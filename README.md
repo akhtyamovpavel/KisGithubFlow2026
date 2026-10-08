@@ -96,7 +96,23 @@ uv run --project backend --frozen pytest backend/tests
 uv run --project backend --frozen ruff check backend
 ```
 
-Проверки охватывают `/health`, OpenAPI, разрешённые и запрещённые источники CORS, чтение настроек и приоритет переменных окружения.
+Набор включает сквозной API-сценарий регистрации, подачи объявления с фотографией, отказа модератора, исправления, повторной подачи и одобрения. Точечно запустить его можно командой:
+
+```bash
+uv run --project backend --frozen pytest backend/tests/test_mvp_acceptance.py
+```
+
+Сценарий проверяет статусы `draft`, `pending`, `rejected` и `published`, обязательную причину отказа, подтверждение правил при одобрении, сохранение обеих версий и решений в истории. До одобрения объявление отсутствует в каталоге, фотография недоступна публично. После одобрения объявление появляется в каталоге, а фотография открывается.
+
+Для frontend устанавливаем зависимости и запускаем сборку из каталога `frontend`:
+
+```bash
+cd frontend
+npm ci
+npm run build
+```
+
+GitHub Actions выполняет backend-тесты и проверку Ruff для pull request, а также `npm ci` и `npm run build`, если меняется frontend или его workflow. Для локального запуска UI см. раздел «Запускаем frontend» выше.
 
 ## Работаем по GitHub Flow
 

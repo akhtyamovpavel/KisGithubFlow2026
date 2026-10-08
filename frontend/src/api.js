@@ -150,4 +150,8 @@ export function loadPublicListings(signal, query = '') {
   return request(`/listings${suffix}`, { signal, token: null })
 }
 
+export function loadPublicListing(listingId, signal) {
+  return request(`/listings/public/${listingId}`, { signal, token: null })
+}
+
 export { API_URL }

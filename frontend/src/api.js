@@ -112,4 +112,8 @@ export function loadMyListings(signal) {
   return request('/listings/mine', { signal })
 }
 
+export function loadPublicListings(signal) {
+  return request('/listings', { signal, token: null })
+}
+
 export { API_URL }

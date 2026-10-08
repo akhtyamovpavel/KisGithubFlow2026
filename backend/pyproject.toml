@@ -4,8 +4,10 @@ version = "0.1.0"
 description = "FastAPI backend for the classifieds marketplace"
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.14,<2",
     "fastapi>=0.115,<1",
     "pydantic-settings>=2.6,<3",
+    "sqlalchemy>=2.0,<3",
     "uvicorn>=0.32,<1",
 ]
 

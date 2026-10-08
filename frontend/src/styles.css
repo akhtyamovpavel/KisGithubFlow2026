@@ -130,6 +130,13 @@ h1 { margin-bottom: 18px; font: 700 clamp(36px, 5vw, 58px)/1.08 Manrope, sans-se
 .submission-rules { margin: 0 0 22px; padding: 17px 18px; border: 1px solid #dce5d8; border-radius: 13px; background: #f4f7f0; }
 .submission-rules h2 { margin: 0 0 10px; font: 700 14px Manrope, sans-serif; }
 .submission-rules ul, .validation-results ul { margin: 0; padding-left: 18px; color: #5d6559; font-size: 12px; line-height: 1.7; }
+.listing-history { margin: 0 0 22px; padding: 16px; border: 1px solid #ead8c9; border-radius: 13px; background: #fffaf5; }
+.listing-history h2 { margin: 0 0 10px; font: 700 14px Manrope, sans-serif; }
+.listing-history > p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.listing-history-entry { padding: 10px 0; border-top: 1px solid #eee3d8; color: #53564e; font-size: 12px; line-height: 1.5; }
+.listing-history-entry > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 5px 12px; }
+.listing-history-entry time { color: var(--muted); font-size: 11px; }
+.listing-history-entry p { margin: 6px 0 0; }
 .validation-results { margin-top: 16px; padding: 13px 15px; border-radius: 11px; background: #fff0ec; color: #8d3b30; font-size: 12px; line-height: 1.6; }
 .validation-results strong { display: block; margin-bottom: 5px; }
 .validation-results ul { color: #8d3b30; }

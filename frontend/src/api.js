@@ -101,6 +101,10 @@ export function loadListing(listingId, signal) {
   return request(`/listings/${listingId}`, { signal })
 }
 
+export function loadListingHistory(listingId, signal) {
+  return request(`/listings/${listingId}/history`, { signal })
+}
+
 export function updateListing(listingId, payload) {
   return request(`/listings/${listingId}`, {
     method: 'PUT',

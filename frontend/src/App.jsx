@@ -8,6 +8,7 @@ import {
   decideModeration,
   deleteListingPhoto,
   loadListing,
+  loadListingHistory,
   loadListingPhoto,
   loadCategories,
   loadMyListings,
@@ -774,6 +775,9 @@ function CreateListingPage({ user }) {
   const [draft, setDraft] = useState(null)
   const [draftState, setDraftState] = useState(editing ? 'loading' : 'ready')
   const [photos, setPhotos] = useState([])
+  const [submissionHistory, setSubmissionHistory] = useState([])
+  const [historyState, setHistoryState] = useState('idle')
+  const [historyError, setHistoryError] = useState('')
   const [createdListing, setCreatedListing] = useState(null)
   const [attachedPhotoCount, setAttachedPhotoCount] = useState(0)
   const [validationResult, setValidationResult] = useState(null)
@@ -812,11 +816,16 @@ function CreateListingPage({ user }) {
     if (!user || !listingId) {
       setDraft(null)
       setPhotos([])
+      setSubmissionHistory([])
+      setHistoryState('idle')
+      setHistoryError('')
       setDraftState('ready')
       return undefined
     }
     const controller = new AbortController()
     setDraftState('loading')
+    setHistoryState('idle')
+    setHistoryError('')
     loadListing(listingId, controller.signal)
       .then((listing) => {
         setDraft(listing)
@@ -826,6 +835,23 @@ function CreateListingPage({ user }) {
         setDraftState('ready')
         if (['draft', 'rejected'].includes(listing.status)) {
           validateListing(listing.id).then(setValidationResult).catch(() => {})
+        }
+        if (listing.status === 'rejected') {
+          setHistoryState('loading')
+          loadListingHistory(listing.id, controller.signal)
+            .then((history) => {
+              setSubmissionHistory(history)
+              setHistoryState('ready')
+            })
+            .catch((error) => {
+              if (error.name !== 'AbortError') {
+                setHistoryError(error.message)
+                setHistoryState('error')
+              }
+            })
+        } else {
+          setSubmissionHistory([])
+          setHistoryState('idle')
         }
       })
       .catch((error) => {
@@ -967,6 +993,18 @@ function CreateListingPage({ user }) {
           <ul>{submissionRules.map((rule) => <li key={rule.id}>{rule.label}</li>)}</ul>
         </section>}
         {editing && draft && <div className="form-status" role="status">Статус: {LISTING_STATUS_LABELS[draft.status] || draft.status}. Изменено: {formatDate(draft.updated_at)}</div>}
+        {editing && draft?.status === 'rejected' && <section className="listing-history" aria-label="История решений модератора">
+          <h2>Решения модератора</h2>
+          {historyState === 'loading' && <p role="status">Загружаем историю подачи…</p>}
+          {historyState === 'error' && <p className="form-error" role="alert">Не удалось загрузить историю: {historyError}</p>}
+          {historyState === 'ready' && submissionHistory.filter((submission) => submission.decision).length === 0 && <p>Решений по объявлению пока нет.</p>}
+          {historyState === 'ready' && submissionHistory.filter((submission) => submission.decision).map((submission) => (
+            <article className="listing-history-entry" key={submission.id}>
+              <div><strong>{submission.decision.status === 'rejected' ? 'Отклонено' : 'Одобрено'} · версия {submission.version}</strong><time dateTime={submission.decision.decided_at}>{formatDate(submission.decision.decided_at)}</time></div>
+              {submission.decision.reason && <p><strong>Причина:</strong> {submission.decision.reason}</p>}
+            </article>
+          ))}
+        </section>}
         <label className="field">
           <span>Название</span>
           <input defaultValue={draft?.title || ''} maxLength={200} name="title" placeholder="Например, городской велосипед" required />

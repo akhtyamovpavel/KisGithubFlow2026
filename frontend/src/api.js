@@ -94,6 +94,17 @@ export function createListing(payload) {
   })
 }
 
+export function loadListing(listingId, signal) {
+  return request(`/listings/${listingId}`, { signal })
+}
+
+export function updateListing(listingId, payload) {
+  return request(`/listings/${listingId}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
 export function validateListing(listingId) {
   return request(`/listings/${listingId}/validation`)
 }
@@ -102,14 +113,34 @@ export function submitListing(listingId) {
   return request(`/listings/${listingId}/submit`, { method: 'POST' })
 }
 
+export function loadMyListings(signal) {
+  return request('/listings/mine', { signal })
+}
+
 export function uploadListingPhoto(listingId, file) {
   const body = new FormData()
   body.append('image', file)
   return request(`/listings/${listingId}/photos`, { method: 'POST', body })
 }
 
-export function loadMyListings(signal) {
-  return request('/listings/mine', { signal })
+export function replaceListingPhoto(listingId, photoId, file) {
+  const body = new FormData()
+  body.append('image', file)
+  return request(`/listings/${listingId}/photos/${photoId}`, { method: 'PUT', body })
+}
+
+export function deleteListingPhoto(listingId, photoId) {
+  return request(`/listings/${listingId}/photos/${photoId}`, { method: 'DELETE' })
+}
+
+export async function loadListingPhoto(photoId, signal) {
+  const token = localStorage.getItem(TOKEN_KEY)
+  const response = await fetch(`${API_URL}/media/${photoId}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    signal,
+  })
+  if (!response.ok) throw new Error(`Не удалось загрузить фото (${response.status}).`)
+  return response.blob()
 }
 
 export function loadPublicListings(signal) {

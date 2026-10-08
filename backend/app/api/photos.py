@@ -15,7 +15,7 @@ from app.media_storage import (
     save_image,
     schedule_image_deletion,
 )
-from app.models import Listing, ListingPhoto, ListingStatus, UserRole
+from app.models import Listing, ListingPhoto, ListingStatus, UserRole, utc_now
 
 router = APIRouter(tags=["listing photos"])
 MAX_PHOTO_COUNT = 5
@@ -48,6 +48,20 @@ def get_owned_listing(
             detail="Only the listing author can manage its photos",
         )
 
+    return listing
+
+
+def get_editable_listing(
+    session: DatabaseSession,
+    listing_id: int,
+    user: CurrentUser,
+) -> Listing:
+    listing = get_owned_listing(session, listing_id, user)
+    if listing.status not in {ListingStatus.DRAFT, ListingStatus.REJECTED}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only drafts and rejected listings can be edited",
+        )
     return listing
 
 
@@ -132,7 +146,7 @@ async def upload_listing_photo(
     user: CurrentUser,
     image: Annotated[UploadFile, File()],
 ) -> ListingPhotoResponse:
-    listing = get_owned_listing(session, listing_id, user)
+    listing = get_editable_listing(session, listing_id, user)
     photo_count = session.scalar(
         select(func.count(ListingPhoto.id)).where(
             ListingPhoto.listing_id == listing.id
@@ -154,6 +168,7 @@ async def upload_listing_photo(
         position=get_next_position(session, listing.id),
     )
     session.add(photo)
+    listing.updated_at = utc_now()
 
     try:
         session.commit()
@@ -180,7 +195,7 @@ async def replace_listing_photo(
     user: CurrentUser,
     image: Annotated[UploadFile, File()],
 ) -> ListingPhotoResponse:
-    listing = get_owned_listing(session, listing_id, user)
+    listing = get_editable_listing(session, listing_id, user)
     photo = session.get(ListingPhoto, photo_id)
 
     if photo is None or photo.listing_id != listing.id:
@@ -194,6 +209,7 @@ async def replace_listing_photo(
     new_storage_key = save_image(listing.id, extension, content)
     photo.storage_key = new_storage_key
     photo.content_type = content_type
+    listing.updated_at = utc_now()
     schedule_image_deletion(session, old_storage_key)
 
     try:
@@ -220,7 +236,7 @@ def delete_listing_photo(
     session: DatabaseSession,
     user: CurrentUser,
 ) -> None:
-    listing = get_owned_listing(session, listing_id, user)
+    listing = get_editable_listing(session, listing_id, user)
     photo = session.get(ListingPhoto, photo_id)
 
     if photo is None or photo.listing_id != listing.id:
@@ -230,6 +246,7 @@ def delete_listing_photo(
         )
 
     session.delete(photo)
+    listing.updated_at = utc_now()
     session.commit()
 
 

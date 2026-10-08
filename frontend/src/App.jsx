@@ -1,17 +1,22 @@
-import { useEffect, useState } from 'react'
-import { Link, NavLink, Route, Routes, useNavigate } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Link, NavLink, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import {
   API_URL,
   apiRequest,
   checkApiHealth,
   createListing,
+  deleteListingPhoto,
+  loadListing,
+  loadListingPhoto,
   loadCategories,
   loadMyListings,
   loadSubmissionRules,
   loadPublicListings,
   registerUser,
+  replaceListingPhoto,
   signIn,
   submitListing,
+  updateListing,
   uploadListingPhoto,
   validateListing,
 } from './api.js'
@@ -391,17 +396,122 @@ function ModerationQueuePage({ user }) {
   </PageFrame>
 }
 
+function PhotoPreview({ listingId, photo }) {
+  const [source, setSource] = useState('')
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    let objectUrl
+    loadListingPhoto(photo.id, controller.signal)
+      .then((blob) => {
+        objectUrl = URL.createObjectURL(blob)
+        setSource(objectUrl)
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') setFailed(true)
+      })
+    return () => {
+      controller.abort()
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [listingId, photo.id])
+
+  return source
+    ? <img alt={`Фото объявления ${listingId}`} src={source} />
+    : <span className="draft-photo-placeholder" role="status">{failed ? 'Фото недоступно' : 'Загружаем фото'}</span>
+}
+
+function DraftPhotoManager({ listingId, photos, onChange }) {
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function handleUpload(event) {
+    const files = [...event.currentTarget.files]
+    event.currentTarget.value = ''
+    if (!files.length) return
+    setError('')
+    setBusy(true)
+    try {
+      let nextPhotos = photos
+      for (const file of files) {
+        const photo = await uploadListingPhoto(listingId, file)
+        nextPhotos = [...nextPhotos, photo].sort((left, right) => left.position - right.position)
+        await onChange(nextPhotos)
+      }
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleReplace(photoId, event) {
+    const file = event.currentTarget.files?.[0]
+    event.currentTarget.value = ''
+    if (!file) return
+    setError('')
+    setBusy(true)
+    try {
+      const replaced = await replaceListingPhoto(listingId, photoId, file)
+      await onChange(photos.map((photo) => photo.id === photoId ? { ...replaced, previewVersion: Date.now() } : photo))
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleDelete(photoId) {
+    setError('')
+    setBusy(true)
+    try {
+      await deleteListingPhoto(listingId, photoId)
+      await onChange(photos.filter((photo) => photo.id !== photoId))
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <section className="draft-photos" aria-label="Фотографии объявления">
+    <div className="draft-photos-heading"><div><h2>Фотографии</h2><p>До 5 файлов, каждый не больше 5 МБ.</p></div><span>{photos.length}/5</span></div>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    {photos.length > 0 && <div className="draft-photo-grid">{photos.map((photo) => <article className="draft-photo-card" key={`${photo.id}-${photo.previewVersion || 0}`}>
+      <PhotoPreview listingId={listingId} photo={photo} />
+      <div className="draft-photo-actions">
+        <label className="text-button">Заменить<input accept="image/jpeg,image/png,image/webp" disabled={busy} onChange={(event) => handleReplace(photo.id, event)} type="file" /></label>
+        <button className="text-button" disabled={busy} onClick={() => handleDelete(photo.id)} type="button">Удалить</button>
+      </div>
+    </article>)}</div>}
+    {photos.length < 5 && <label className="button button-secondary photo-upload">{busy ? 'Сохраняем…' : 'Добавить фото'}<input accept="image/jpeg,image/png,image/webp" disabled={busy} multiple onChange={handleUpload} type="file" /></label>}
+  </section>
+}
+
+function formatDate(value) {
+  if (!value) return 'Дата неизвестна'
+  return new Intl.DateTimeFormat('ru-RU', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
+}
+
 function CreateListingPage({ user }) {
+  const { listingId } = useParams()
+  const navigate = useNavigate()
+  const editing = Boolean(listingId)
   const [categories, setCategories] = useState([])
   const [submissionRules, setSubmissionRules] = useState([])
   const [categoryState, setCategoryState] = useState('loading')
   const [categoryError, setCategoryError] = useState('')
   const [categoryAttempt, setCategoryAttempt] = useState(0)
   const [formError, setFormError] = useState('')
+  const [draft, setDraft] = useState(null)
+  const [draftState, setDraftState] = useState(editing ? 'loading' : 'ready')
+  const [photos, setPhotos] = useState([])
   const [createdListing, setCreatedListing] = useState(null)
   const [attachedPhotoCount, setAttachedPhotoCount] = useState(0)
   const [validationResult, setValidationResult] = useState(null)
   const [submitting, setSubmitting] = useState(false)
+  const formRef = useRef(null)
 
   useEffect(() => {
     if (!user) {
@@ -431,11 +541,38 @@ function CreateListingPage({ user }) {
     return () => controller.abort()
   }, [user, categoryAttempt])
 
+  useEffect(() => {
+    if (!user || !listingId) {
+      setDraft(null)
+      setPhotos([])
+      setDraftState('ready')
+      return undefined
+    }
+    const controller = new AbortController()
+    setDraftState('loading')
+    loadListing(listingId, controller.signal)
+      .then((listing) => {
+        setDraft(listing)
+        setPhotos(listing.photos || [])
+        setCreatedListing(listing)
+        setAttachedPhotoCount((listing.photos || []).length)
+        setDraftState('ready')
+        if (['draft', 'rejected'].includes(listing.status)) {
+          validateListing(listing.id).then(setValidationResult).catch(() => {})
+        }
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') {
+          setFormError(error.message)
+          setDraftState('error')
+        }
+      })
+    return () => controller.abort()
+  }, [user, listingId])
+
   async function handleSubmit(event) {
     event.preventDefault()
-    const form = event.currentTarget
     setFormError('')
-    setCreatedListing(null)
     setSubmitting(true)
 
     const formData = new FormData(event.currentTarget)
@@ -452,18 +589,34 @@ function CreateListingPage({ user }) {
       category_id: Number(formData.get('category_id')),
     }
 
+    let savedListing = null
     try {
-      const listing = await createListing(payload)
-      setCreatedListing(listing)
-      let uploadedCount = 0
-      for (const file of imageFiles) {
-        await uploadListingPhoto(listing.id, file)
-        uploadedCount += 1
-        setAttachedPhotoCount(uploadedCount)
+      if (editing) {
+        const listing = await updateListing(listingId, payload)
+        savedListing = listing
+        setDraft(listing)
+        setCreatedListing(listing)
+        setPhotos(listing.photos || [])
+        setValidationResult(await validateListing(listing.id))
+      } else {
+        const listing = await createListing(payload)
+        savedListing = listing
+        setDraft(listing)
+        setCreatedListing(listing)
+        let uploadedCount = 0
+        for (const file of imageFiles) {
+          await uploadListingPhoto(listing.id, file)
+          uploadedCount += 1
+          setAttachedPhotoCount(uploadedCount)
+        }
+        setValidationResult(await validateListing(listing.id))
+        navigate(`/listings/${listing.id}/edit`, { replace: true })
       }
-      setValidationResult(await validateListing(listing.id))
     } catch (error) {
       setFormError(error.message)
+      if (!editing && savedListing) {
+        navigate(`/listings/${savedListing.id}/edit`, { replace: true })
+      }
     } finally {
       setSubmitting(false)
     }
@@ -474,13 +627,28 @@ function CreateListingPage({ user }) {
     setSubmitting(true)
     setFormError('')
     try {
-      const result = await validateListing(createdListing.id)
+      let listing = createdListing
+      if (editing && formRef.current) {
+        const formData = new FormData(formRef.current)
+        listing = await updateListing(listing.id, {
+          title: formData.get('title').trim(),
+          description: formData.get('description').trim(),
+          price: formData.get('price'),
+          category_id: Number(formData.get('category_id')),
+        })
+        setDraft(listing)
+        setCreatedListing(listing)
+      }
+      const result = await validateListing(listing.id)
       setValidationResult(result)
       if (!result.valid) {
         setFormError('Перед подачей исправьте нарушения в списке ниже.')
         return
       }
-      setCreatedListing(await submitListing(createdListing.id))
+      const submitted = await submitListing(listing.id)
+      setCreatedListing(submitted)
+      setDraft(submitted)
+      navigate('/my-listings')
     } catch (requestError) {
       const violations = requestError.data?.detail?.violations
       if (violations) {
@@ -502,9 +670,19 @@ function CreateListingPage({ user }) {
     )
   }
 
+  if (draftState === 'loading') {
+    return <PageFrame eyebrow="ЧЕРНОВИК" title="Загружаем объявление"><div className="form-status" role="status">Загружаем данные черновика</div></PageFrame>
+  }
+  if (draftState === 'error') {
+    return <PageFrame eyebrow="ЧЕРНОВИК" title="Не удалось открыть объявление"><div className="form-error" role="alert">{formError}</div><Link className="button button-secondary" to="/my-listings">К моим объявлениям</Link></PageFrame>
+  }
+  if (editing && draft && !['draft', 'rejected'].includes(draft.status)) {
+    return <PageFrame eyebrow="ОБЪЯВЛЕНИЕ" title="Редактирование недоступно" description={`Статус: ${LISTING_STATUS_LABELS[draft.status] || draft.status}. Последнее изменение: ${formatDate(draft.updated_at)}.`}><Link className="button button-secondary" to="/my-listings">К моим объявлениям</Link></PageFrame>
+  }
+
   return (
-    <PageFrame eyebrow="НОВОЕ ОБЪЯВЛЕНИЕ" title="Дадим вещи вторую жизнь" description="Опишите вещь и подготовьте объявление к публикации.">
-      <form className="form-card listing-form" onSubmit={handleSubmit}>
+    <PageFrame eyebrow={editing ? 'РЕДАКТИРОВАНИЕ ЧЕРНОВИКА' : 'НОВОЕ ОБЪЯВЛЕНИЕ'} title={editing ? 'Продолжим подготовку' : 'Дадим вещи вторую жизнь'} description={editing ? 'Изменения сохраняются как черновик и не отправляют объявление на модерацию.' : 'Опишите вещь и сохраните объявление как черновик.'}>
+      <form className="form-card listing-form" onSubmit={handleSubmit} ref={formRef}>
         {categoryState === 'loading' && <div className="form-status" role="status">Загружаем категории</div>}
         {categoryState === 'error' && <div className="form-error" role="alert">Не удалось загрузить категории: {categoryError}</div>}
         {categoryState === 'error' && <button className="text-button category-retry" onClick={() => setCategoryAttempt((value) => value + 1)} type="button">Загрузить категории ещё раз</button>}
@@ -513,44 +691,54 @@ function CreateListingPage({ user }) {
         {createdListing && (
           <div className="form-success" role="status">
             <strong>{createdListing.status === 'pending' ? 'Объявление отправлено' : 'Черновик сохранён'}</strong>
-            <span>Статус: {createdListing.status === 'pending' ? 'на модерации' : 'черновик'}</span>
-            <span>Фотографий загружено: {attachedPhotoCount}</span>
+            <span>Статус: {LISTING_STATUS_LABELS[createdListing.status] || createdListing.status}</span>
+            <span>Фотографий: {attachedPhotoCount}</span>
           </div>
         )}
         {submissionRules.length > 0 && <section className="submission-rules" aria-label="Правила перед подачей">
           <h2>Проверьте перед подачей</h2>
           <ul>{submissionRules.map((rule) => <li key={rule.id}>{rule.label}</li>)}</ul>
         </section>}
+        {editing && draft && <div className="form-status" role="status">Статус: {LISTING_STATUS_LABELS[draft.status] || draft.status}. Изменено: {formatDate(draft.updated_at)}</div>}
         <label className="field">
           <span>Название</span>
-          <input disabled={Boolean(createdListing)} maxLength={200} name="title" placeholder="Например, городской велосипед" required />
+          <input defaultValue={draft?.title || ''} maxLength={200} name="title" placeholder="Например, городской велосипед" required />
         </label>
         <label className="field">
           <span>Категория</span>
-          <select defaultValue="" disabled={Boolean(createdListing)} name="category_id" required>
+          <select defaultValue={draft?.category_id || ''} name="category_id" required>
             <option disabled value="">Категория не выбрана</option>
             {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
           </select>
         </label>
         <label className="field">
           <span>Описание</span>
-          <textarea disabled={Boolean(createdListing)} maxLength={5000} name="description" placeholder="Состояние, особенности и где забрать" rows="4" required />
+          <textarea defaultValue={draft?.description || ''} maxLength={5000} name="description" placeholder="Состояние, особенности и где забрать" rows="4" required />
         </label>
         <label className="field">
           <span>Цена, ₽</span>
-          <input disabled={Boolean(createdListing)} min="0" name="price" placeholder="0" required step="0.01" type="number" />
+          <input defaultValue={draft?.price || ''} min="0" name="price" placeholder="0" required step="0.01" type="number" />
         </label>
-        <label className="field">
+        {editing && draft && <DraftPhotoManager listingId={draft.id} onChange={async (nextPhotos) => {
+          setPhotos(nextPhotos)
+          const updated = await loadListing(draft.id)
+          setDraft(updated)
+          setCreatedListing(updated)
+          setAttachedPhotoCount((updated.photos || []).length)
+          setValidationResult(await validateListing(updated.id))
+        }} photos={photos} />}
+        {!editing && <label className="field">
           <span>Фотографии</span>
-          <input accept="image/*" disabled={Boolean(createdListing)} multiple name="photos" type="file" />
+          <input accept="image/jpeg,image/png,image/webp" multiple name="photos" type="file" />
           <small>От одной до пяти фотографий. Размер каждого файла до 5 МБ.</small>
-        </label>
-        <button className="button button-primary form-submit" disabled={categoryState !== 'ready' || categories.length === 0 || submitting || Boolean(createdListing)} type="submit">{submitting ? 'Сохраняем' : 'Сохранить черновик'}</button>
-        <button className="button button-secondary form-submit" disabled={!createdListing || createdListing.status === 'pending' || submitting} onClick={handleSubmitToModeration} type="button">{submitting ? 'Проверяем' : createdListing?.status === 'pending' ? 'Уже подано' : 'Подать на модерацию'}</button>
+        </label>}
+        <button className="button button-primary form-submit" disabled={categoryState !== 'ready' || categories.length === 0 || submitting} type="submit">{submitting ? 'Сохраняем' : editing ? 'Сохранить изменения' : 'Сохранить черновик'}</button>
+        <button className="button button-secondary form-submit" disabled={!createdListing || submitting} onClick={handleSubmitToModeration} type="button">{submitting ? 'Проверяем' : 'Подать на модерацию'}</button>
         {validationResult && !validationResult.valid && <div className="validation-results" role="alert">
           <strong>Найдены нарушения</strong>
           <ul>{validationResult.violations.map((violation) => <li key={`${violation.rule_id}-${violation.field}`}><b>{violation.field}:</b> {violation.message}</li>)}</ul>
         </div>}
+        <p className="form-note">Сохранение оставляет объявление черновиком. Подача запускает обязательные проверки.</p>
       </form>
     </PageFrame>
   )
@@ -591,8 +779,8 @@ function MyListingsPage({ user }) {
         <section aria-label="Список объявлений" className="listing-list">
           {listings.map((listing) => (
             <article className="listing-card" key={listing.id}>
-              <div><h2>{listing.title}</h2><p>{listing.description}</p></div>
-            <span className="status-pill">{LISTING_STATUS_LABELS[listing.status] || listing.status}</span>
+              <div className="listing-card-content"><h2>{listing.title || 'Без названия'}</h2><p>{listing.description || 'Описание пока не заполнено.'}</p><time dateTime={listing.updated_at}>Изменено {formatDate(listing.updated_at)}</time></div>
+              <div className="listing-card-actions"><span className="status-pill">{LISTING_STATUS_LABELS[listing.status] || listing.status}</span>{['draft', 'rejected'].includes(listing.status) && <Link className="text-button" to={`/listings/${listing.id}/edit`}>Продолжить редактирование</Link>}</div>
             </article>
           ))}
         </section>
@@ -642,6 +830,7 @@ export default function App() {
         <Route element={<AuthPage mode="login" onAuthenticated={setUser} />} path="/login" />
         <Route element={<AuthPage mode="register" onAuthenticated={setUser} />} path="/register" />
         <Route element={<CreateListingPage user={user} />} path="/listings/new" />
+        <Route element={<CreateListingPage user={user} />} path="/listings/:listingId/edit" />
         <Route element={<MyListingsPage user={user} />} path="/my-listings" />
         <Route element={<ModerationQueuePage user={user} />} path="/moderation" />
         <Route element={<NotFoundPage />} path="*" />

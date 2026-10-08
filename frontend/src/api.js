@@ -130,4 +130,8 @@ export async function loadListingPhoto(photoId, signal) {
   return response.blob()
 }
 
+export function loadPublicListings(signal) {
+  return request('/listings', { signal, token: null })
+}
+
 export { API_URL }

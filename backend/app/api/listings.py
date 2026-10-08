@@ -4,6 +4,7 @@ from decimal import Decimal
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import CurrentUser, DatabaseSession
 from app.models import Category, Listing, ListingStatus, UserRole
@@ -54,6 +55,29 @@ class ListingResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     photos: list[ListingPhotoResponse]
+
+
+class PublicListingResponse(BaseModel):
+    id: int
+    title: str
+    price: Decimal
+    category: str
+    main_photo_url: str | None
+
+
+def public_listing_response(listing: Listing) -> PublicListingResponse:
+    main_photo = min(
+        listing.photos,
+        key=lambda photo: (photo.position, photo.id),
+        default=None,
+    )
+    return PublicListingResponse(
+        id=listing.id,
+        title=listing.title,
+        price=listing.price,
+        category=listing.category.name,
+        main_photo_url=f"/media/{main_photo.id}" if main_photo is not None else None,
+    )
 
 
 def listing_response(listing: Listing) -> dict:
@@ -198,3 +222,15 @@ def update_draft_listing(
     session.commit()
     session.refresh(listing)
     return listing_response(listing)
+
+
+@router.get("", response_model=list[PublicListingResponse])
+def list_published_listings(session: DatabaseSession) -> list[PublicListingResponse]:
+    statement = (
+        select(Listing)
+        .where(Listing.status == ListingStatus.PUBLISHED)
+        .options(selectinload(Listing.category), selectinload(Listing.photos))
+        .order_by(Listing.published_at.desc(), Listing.id.desc())
+    )
+    listings = session.scalars(statement).all()
+    return [public_listing_response(listing) for listing in listings]

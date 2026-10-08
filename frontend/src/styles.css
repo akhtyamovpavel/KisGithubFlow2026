@@ -71,6 +71,15 @@ h1 { margin-bottom: 18px; font: 700 clamp(36px, 5vw, 58px)/1.08 Manrope, sans-se
 .plant { position: absolute; bottom: 28px; left: 0; color: #5a805d; font-size: 24px; }
 .empty-state h2, .empty-card h2 { margin-bottom: 8px; font: 700 19px Manrope, sans-serif; letter-spacing: -0.4px; }
 .empty-state p, .empty-card p { max-width: 390px; margin-bottom: 20px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+.catalog-message { min-height: 337px; display: grid; place-items: center; color: var(--muted); font-size: 14px; }
+.public-listings { display: grid; grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); gap: 18px; padding: 22px; }
+.public-listing-card { overflow: hidden; border: 1px solid var(--line); border-radius: 15px; background: white; }
+.public-listing-photo { display: block; width: 100%; height: 190px; object-fit: cover; background: #f2f0e9; }
+.public-listing-photo--empty { display: grid; place-items: center; color: var(--muted); font-size: 12px; }
+.public-listing-info { padding: 15px 16px 17px; }
+.public-listing-category { margin-bottom: 6px; color: var(--muted); font-size: 11px; }
+.public-listing-info h2 { min-height: 42px; margin-bottom: 11px; font: 700 16px/1.35 Manrope, sans-serif; }
+.public-listing-price { margin: 0; color: var(--green-dark); font: 700 17px Manrope, sans-serif; }
 
 .button { min-height: 46px; display: inline-flex; align-items: center; justify-content: center; padding: 0 19px; border: 0; border-radius: 999px; text-decoration: none; font-size: 13px; font-weight: 700; cursor: pointer; transition: background 150ms ease, transform 150ms ease; }
 .button:hover { transform: translateY(-1px); }

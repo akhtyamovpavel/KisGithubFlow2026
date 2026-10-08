@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Mini Marketplace"
+    upload_directory: Path = Path(__file__).resolve().parents[1] / "uploads"
     database_url: str = (
         f"sqlite:///{Path(__file__).resolve().parents[1] / 'marketplace.db'}"
     )

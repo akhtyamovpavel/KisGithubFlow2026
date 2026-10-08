@@ -5,6 +5,7 @@ import {
   apiRequest,
   checkApiHealth,
   createListing,
+  decideModeration,
   deleteListingPhoto,
   loadListing,
   loadListingPhoto,
@@ -438,8 +439,11 @@ function ModerationQueuePage({ user }) {
   const [items, setItems] = useState([])
   const [selected, setSelected] = useState(null)
   const [checkedRules, setCheckedRules] = useState([])
+  const [decisionReason, setDecisionReason] = useState('')
+  const [decisionInProgress, setDecisionInProgress] = useState(false)
   const [state, setState] = useState('loading')
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const token = localStorage.getItem('marketplace-token')
 
   useEffect(() => {
@@ -461,16 +465,46 @@ function ModerationQueuePage({ user }) {
 
   async function openSubmission(id) {
     setError('')
+    setNotice('')
     try {
       const submission = await apiRequest(`/moderation/queue/${id}`, { token })
       setSelected(submission)
       setCheckedRules([])
+      setDecisionReason('')
     } catch (requestError) {
       setError(requestError.message)
       if (requestError.status === 404) {
         setItems((current) => current.filter((item) => item.id !== id))
         setSelected(null)
       }
+    }
+  }
+
+  async function submitDecision(decision) {
+    if (!selected) return
+    setError('')
+    setNotice('')
+    setDecisionInProgress(true)
+    try {
+      await decideModeration(selected.id, {
+        decision,
+        reason: decision === 'rejected' ? decisionReason : null,
+        confirmed_rule_ids: decision === 'approved' ? checkedRules : [],
+      })
+      setItems((current) => current.filter((item) => item.id !== selected.id))
+      setSelected(null)
+      setCheckedRules([])
+      setDecisionReason('')
+      setNotice(decision === 'approved' ? 'Объявление опубликовано.' : 'Объявление отклонено.')
+    } catch (requestError) {
+      setError(requestError.message)
+      if (requestError.status === 409) {
+        setItems((current) => current.filter((item) => item.id !== selected.id))
+        setSelected(null)
+        setCheckedRules([])
+      }
+    } finally {
+      setDecisionInProgress(false)
     }
   }
 
@@ -481,6 +515,7 @@ function ModerationQueuePage({ user }) {
   }
 
   return <PageFrame eyebrow="РАБОЧЕЕ МЕСТО МОДЕРАТОРА" title="Очередь объявлений" description="Объявления расположены от самых ранних заявок к новым.">
+    {notice && <p className="form-success" role="status">{notice}</p>}
     {state === 'loading' && <p className="queue-message" role="status">Загружаем очередь…</p>}
     {state === 'error' && <div className="queue-message queue-message--error" role="alert">{error}</div>}
     {state === 'ready' && <div className="moderation-layout">
@@ -529,6 +564,40 @@ function ModerationQueuePage({ user }) {
                 ? 'Все правила отмечены как проверенные.'
                 : `Проверено ${checkedRules.length} из ${selected.rules.length}`}
             </p>
+            {selected.author.id === user.id ? (
+              <p className="decision-guidance" role="status">Нельзя принимать решение по собственному объявлению.</p>
+            ) : (
+              <div className="moderation-decision-form">
+                <label className="field">
+                  <span>Причина отказа</span>
+                  <textarea
+                    onChange={(event) => setDecisionReason(event.target.value)}
+                    placeholder="Укажите нарушенное правило и поясните причину отказа."
+                    rows={3}
+                    value={decisionReason}
+                  />
+                </label>
+                <p className="decision-guidance">Для отказа нужно назвать правило и объяснить причину.</p>
+                <div className="moderation-actions">
+                  <button
+                    className="button button-primary"
+                    disabled={decisionInProgress || checkedRules.length !== selected.rules.length || selected.rules.some((rule) => !rule.passed)}
+                    onClick={() => submitDecision('approved')}
+                    type="button"
+                  >
+                    {decisionInProgress ? 'Сохраняем…' : 'Одобрить и опубликовать'}
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    disabled={decisionInProgress || !decisionReason.trim()}
+                    onClick={() => submitDecision('rejected')}
+                    type="button"
+                  >
+                    Отклонить
+                  </button>
+                </div>
+              </div>
+            )}
           </section>
         </> : <div className="detail-placeholder"><span aria-hidden="true">↖</span><h2>Выберите объявление</h2><p>Полная карточка и фотографии появятся здесь.</p></div>}
         {error && <p className="form-error" role="alert">{error}</p>}

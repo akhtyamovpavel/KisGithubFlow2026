@@ -4,6 +4,9 @@ const TOKEN_KEY = 'marketplace-token'
 function getErrorMessage(error, fallback) {
   if (typeof error === 'string') return error
   if (Array.isArray(error)) return error.map((item) => item.msg).filter(Boolean).join(' ')
+  if (Array.isArray(error?.violations)) {
+    return error.violations.map((item) => item.message).filter(Boolean).join(' ')
+  }
   if (typeof error?.message === 'string') return error.message
   return fallback
 }
@@ -152,6 +155,13 @@ export function loadPublicListings(signal, query = '') {
 
 export function loadPublicListing(listingId, signal) {
   return request(`/listings/public/${listingId}`, { signal, token: null })
+}
+
+export function decideModeration(submissionId, payload) {
+  return request(`/moderation/queue/${submissionId}/decision`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
 }
 
 export { API_URL }

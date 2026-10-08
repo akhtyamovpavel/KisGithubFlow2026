@@ -32,6 +32,8 @@ cp backend/.env.example backend/.env
 
 Переменная `MARKETPLACE_DATABASE_URL` задаёт адрес базы данных. По умолчанию используется SQLite в `backend/marketplace.db`. Создаём схему и применяем обновления командой `uv run --project backend --frozen alembic -c backend/alembic.ini upgrade head`. Версию схемы смотрим командой `uv run --project backend --frozen alembic -c backend/alembic.ini current`.
 
+После применения миграций загружаем начальные категории командой `uv run --project backend --frozen --directory backend python -m app.seed_categories`. Команду можно запускать повторно: существующие категории не дублируются. Активные категории API возвращает по адресу `/categories` в алфавитном порядке. Объявления с отсутствующей категорией блокирует внешний ключ базы данных.
+
 Настройки процесса имеют приоритет над `backend/.env`. Файл окружения ищется относительно каталога backend, независимо от рабочей директории. После изменения настроек перезапускаем сервер. Файлы `.env` и виртуальное окружение исключены из Git, секреты передаём через окружение.
 
 Используем [настройки FastAPI](https://fastapi.tiangolo.com/advanced/settings/) и [CORSMiddleware](https://fastapi.tiangolo.com/tutorial/cors/). CORS разрешает запросы браузера с указанных адресов и не заменяет авторизацию API.
